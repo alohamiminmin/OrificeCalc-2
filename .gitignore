@@ -9,8 +9,10 @@ Cantera.url
 orifice.ico
 ASME MFC14M_2003.pdf
 ASME_MFC14M_2003_Japanese.md
+ASME_MFC14M_Formula_Reference_Japanese.md
+規格比較.pptx
+AGA8.url
+規格比較.xlsx
 utils/__pycache__/excel_export.cpython-314.pyc
 gui/__pycache__/app.cpython-314.pyc
 core/__pycache__/combustion.cpython-314.pyc
-規格比較.xlsx
-ASME_MFC14M_Formula_Reference_Japanese.md
