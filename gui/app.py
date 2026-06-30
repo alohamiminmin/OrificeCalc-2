@@ -86,13 +86,29 @@ def _export_combustion_to_excel(result, gas_name, composition, mixture_sl_cm_s=N
         mb.showerror("エラー", str(e))
 
 
+def _get_settings_path() -> str:
+    """設定ファイル(orifice_settings.json)のパスを返す"""
+    import os, sys
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, "orifice_settings.json")
+
+
 class OrificeCalculatorApp:
     """完全機能 + 混合ガス対応版"""
 
     def __init__(self, root):
         self.root = root
         self.root.title("オリフィス計算（完全機能・混合ガス対応版）")
-        self.root.geometry("900x980")
+
+        # 前回設定を読み込み（ウィンドウ位置・入力値の復元に使用）
+        self._prev_settings = self._load_settings()
+
+        # ウィンドウ位置・サイズを復元（前回保存済みの場合）
+        geom = self._prev_settings.get("geometry", "900x980")
+        self.root.geometry(geom)
 
         # 結果保持
         self.df_result = None
@@ -105,7 +121,7 @@ class OrificeCalculatorApp:
         self.corr_iso = None
         self.corr_jis = None
         self.corr_asme = None
-        
+
         # 混合ガス関連
         self.fluid_mode_var = tk.StringVar(value="single")
         self.current_gas_name = None
@@ -113,6 +129,9 @@ class OrificeCalculatorApp:
         self.current_custom_composition = None  # カスタム組成を確実に保持するための変数
 
         self._build_ui()
+
+        # ×ボタンで設定を保存してから終了
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------------------------------------------------------
     # GUI 構築
@@ -253,6 +272,90 @@ class OrificeCalculatorApp:
         #self.text.pack(fill="both", expand=True, padx=10, pady=10)
 
         self._update_input_display()
+
+        # ── 前回設定から入力値を復元 ──
+        s = self._prev_settings
+        if s:
+            try:
+                for key, var in [
+                    ("pipe_mat",  self.pipe_mat_var),
+                    ("plate_mat", self.plate_mat_var),
+                    ("pipe_size", self.pipe_size_var),
+                    ("z_model",   self.z_model_var),
+                ]:
+                    if key in s:
+                        var.set(s[key])
+                for key, var in [
+                    ("D",      self.D_var),
+                    ("d",      self.d_var),
+                    ("P1",     self.P1_var),
+                    ("deltaP", self.deltaP_var),
+                    ("T",      self.T_var),
+                ]:
+                    if key in s:
+                        var.set(float(s[key]))
+                if s.get("custom_comp"):
+                    self.current_custom_composition = s["custom_comp"]
+                if "fluid_mode" in s:
+                    self.fluid_mode_var.set(s["fluid_mode"])
+                    self._update_gas_combo()
+                    if s["fluid_mode"] == "custom" and self.current_custom_composition:
+                        self.gas_var.set("カスタム混合ガス")
+                        comp = self.current_custom_composition
+                        comp_str = ", ".join(
+                            f"{k}:{v*100:.1f}%" for k, v in list(comp.items())[:4]
+                        )
+                        self.mixture_info_label.config(
+                            text=f"（前回）{comp_str}...", foreground="blue"
+                        )
+                    elif "gas_name" in s:
+                        if s["gas_name"] in self.gas_combo["values"]:
+                            self.gas_var.set(s["gas_name"])
+                            self.current_gas_name = s["gas_name"]
+                self._update_input_display()
+            except Exception:
+                pass  # 復元失敗はデフォルト値のまま継続
+
+    # ---------------------------------------------------------
+    # 設定の保存・読込
+    # ---------------------------------------------------------
+    def _load_settings(self) -> dict:
+        """前回の設定を読み込む。ファイルが無い・壊れている場合は空dictを返す"""
+        import json
+        try:
+            with open(_get_settings_path(), encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_settings(self):
+        """現在の入力値とウィンドウ位置を設定ファイルに保存する"""
+        import json
+        try:
+            settings = {
+                "geometry":    self.root.geometry(),
+                "fluid_mode":  self.fluid_mode_var.get(),
+                "gas_name":    self.gas_var.get(),
+                "pipe_mat":    self.pipe_mat_var.get(),
+                "plate_mat":   self.plate_mat_var.get(),
+                "pipe_size":   self.pipe_size_var.get(),
+                "D":           self.D_var.get(),
+                "d":           self.d_var.get(),
+                "P1":          self.P1_var.get(),
+                "deltaP":      self.deltaP_var.get(),
+                "T":           self.T_var.get(),
+                "z_model":     self.z_model_var.get(),
+                "custom_comp": self.current_custom_composition,
+            }
+            with open(_get_settings_path(), "w", encoding="utf-8") as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass  # 保存失敗は無視
+
+    def _on_close(self):
+        """ウィンドウ×ボタン押下時に設定を保存してから終了"""
+        self._save_settings()
+        self.root.destroy()
 
     # ---------------------------------------------------------
     # 混合ガス関連メソッド
@@ -827,11 +930,32 @@ class OrificeCalculatorApp:
             messagebox.showinfo("情報", "ガスを選択してから実行してください")
             return
 
-        # ── ウィンドウ ──
+        # ── ウィンドウ（オリフィスGUI右隣に配置し移動に追従） ──
         win = tk.Toplevel(self.root)
         win.title(f"燃焼特性 — {gas_name}")
-        win.geometry("960x900")
         win.resizable(True, True)
+
+        def _place_beside_main():
+            self.root.update_idletasks()
+            mx = self.root.winfo_x()
+            my = self.root.winfo_y()
+            mw = self.root.winfo_width()
+            win.geometry(f"960x900+{mx + mw + 4}+{my}")
+
+        def _follow_main(event=None):
+            if not win.winfo_exists():
+                return
+            mx = self.root.winfo_x()
+            my = self.root.winfo_y()
+            mw = self.root.winfo_width()
+            ww = win.winfo_width()
+            wh = win.winfo_height()
+            win.geometry(f"{ww}x{wh}+{mx + mw + 4}+{my}")
+
+        _place_beside_main()
+        self.root.bind("<Configure>", _follow_main)
+        win.protocol("WM_DELETE_WINDOW",
+                     lambda: [self.root.unbind("<Configure>"), win.destroy()])
 
         # ── 条件入力フレーム（燃焼特性） ──
         cond_frame = ttk.LabelFrame(win, text="計算条件（燃焼特性）")
@@ -1012,10 +1136,15 @@ class OrificeCalculatorApp:
                 frac * result["components"].get(f, {}).get("density_kg_m3", 0.0)
                 for f, frac in comp.items()
             )
+            RHO_AIR = 1.2928   # 空気密度 kg/Nm³（0℃, 101.325 kPa）
+            MJ2KCAL = 238.846  # 1 MJ = 238.846 kcal
+            sg       = rho_mix / RHO_AIR
+            hhv_mj   = t["HHV_MJ_Nm3"]
+            lhv_mj   = t["LHV_MJ_Nm3"]
             total_lbl.config(text=(
-                f"  密度: {rho_mix:.5f} kg/Nm³\n"
-                f"  HHV: {t['HHV_MJ_Nm3']:.4f} MJ/Nm³    "
-                f"LHV: {t['LHV_MJ_Nm3']:.4f} MJ/Nm³\n"
+                f"  密度: {rho_mix:.5f} kg/Nm³    比重(空気=1): {sg:.4f}\n"
+                f"  HHV: {hhv_mj:.4f} MJ/Nm³  ({hhv_mj * MJ2KCAL:.1f} kcal/Nm³)    "
+                f"LHV: {lhv_mj:.4f} MJ/Nm³  ({lhv_mj * MJ2KCAL:.1f} kcal/Nm³)\n"
                 f"{o2_line}"
                 f"  理論空気量(外部追加分): {t['theoretical_air_Nm3']:.4f} Nm³/Nm³    "
                 f"実空気量(λ={lam:.2f}): {t['actual_air_Nm3']:.4f} Nm³/Nm³\n"
