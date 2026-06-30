@@ -122,9 +122,8 @@ def _write_composition_sheet(writer, mixture_composition, gas_name=""):
 
 
 def export_combustion_to_excel(result: dict, gas_name: str,
-                                composition: dict, output_path: str = None,
-                                nox_result: dict = None) -> str:
-    """燃焼特性計算結果を Excel に出力（サーマルNOx対応）"""
+                                composition: dict, output_path: str = None) -> str:
+    """燃焼特性計算結果を Excel に出力"""
     if output_path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = f"./combustion_{ts}.xlsx"
@@ -193,54 +192,4 @@ def export_combustion_to_excel(result: dict, gas_name: str,
         }]
         pd.DataFrame(rows_total).to_excel(writer, sheet_name="トータル燃焼特性", index=False)
 
-        # --- サーマルNOxシート（nox_result が渡された場合） ---
-        if nox_result:
-            _write_nox_sheet(writer, nox_result)
-
     return output_path
-
-
-def _write_nox_sheet(writer, nr: dict):
-    """サーマルNOx結果シートを書き込む"""
-    rows = [
-        # ── 入力パラメータ ──
-        {"項目": "【入力パラメータ】",       "値": "",                       "単位": ""},
-        {"項目": "ガス瞬時流量",             "値": nr.get("Q_Nm3h"),         "単位": "Nm³/h"},
-        {"項目": "燃焼噴出径",               "値": nr.get("D_burner_mm"),    "単位": "mm"},
-        {"項目": "想定火炎長",               "値": nr.get("L_flame_m"),      "単位": "m"},
-        {"項目": "空気過剰率 λ",             "値": nr.get("lambda"),         "単位": "-"},
-        {"項目": "初期温度",                  "値": nr.get("T_init_C"),       "単位": "℃"},
-        {"項目": "初期圧力",                  "値": nr.get("P_kPa"),          "単位": "kPa"},
-        {"項目": "",                          "値": "",                       "単位": ""},
-        # ── 火炎特性 ──
-        {"項目": "【火炎特性】",              "値": "",                       "単位": ""},
-        {"項目": "燃料噴出速度",              "値": nr.get("v_fuel_ms"),      "単位": "m/s"},
-        {"項目": "推定火炎滞留時間",           "値": nr.get("tau_ms"),         "単位": "ms"},
-        {"項目": "断熱火炎温度",              "値": nr.get("T_adiabatic_C"),  "単位": "℃"},
-        {"項目": "",                          "値": "",                       "単位": ""},
-        # ── NOx推定値 ──
-        {"項目": "【サーマルNOx推定値】",     "値": "",                       "単位": ""},
-        {"項目": "NOx（Zeldovich推定）",      "値": nr.get("NOx_thermal_ppm"), "単位": "ppm"},
-        {"項目": "NOx（Zeldovich推定）",      "値": nr.get("NOx_thermal_mg_Nm3"), "単位": "mg/Nm³"},
-        {"項目": "NOx（Cantera平衡上限）",    "値": nr.get("NOx_equilibrium_ppm"), "単位": "ppm"},
-        {"項目": "NO（Cantera平衡）",         "値": nr.get("NO_equilibrium_ppm"),  "単位": "ppm"},
-        {"項目": "",                          "値": "",                       "単位": ""},
-        # ── 計算手法・注意事項 ──
-        {"項目": "計算手法",                  "値": nr.get("method", ""),    "単位": ""},
-        {"項目": "注意事項",
-         "値": " / ".join(nr.get("warnings", [])) or "なし",
-         "単位": ""},
-        {"項目": "",                          "値": "",                       "単位": ""},
-        {"項目": "【注記】",                  "値": "", "単位": ""},
-        {"項目": "Zeldovich推定値",
-         "値": "拡張Zeldovich機構（Cantera平衡でO/OHラジカル取得）による積分推定値。"
-               "実際の火炎形状・乱流・燃料希釈等の影響は考慮していません。",
-         "単位": ""},
-        {"項目": "Cantera平衡上限",
-         "値": "十分長い滞留時間での理論上限。実際のNOxはこの値を下回ります。",
-         "単位": ""},
-        {"項目": "mg/Nm³換算",
-         "値": "NO分子量30 g/mol、0℃ 101.325kPa基準（1ppm = 1.338 mg/Nm³）",
-         "単位": ""},
-    ]
-    pd.DataFrame(rows).to_excel(writer, sheet_name="サーマルNOx", index=False)

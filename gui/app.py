@@ -35,7 +35,7 @@ MATERIAL_OPTIONS = [
 ]
 
 
-def _export_combustion_to_excel(result, gas_name, composition, nox_result=None):
+def _export_combustion_to_excel(result, gas_name, composition):
     """燃焼特性の Excel 出力（モジュールレベルヘルパー）"""
     import tkinter.filedialog as fd
     import tkinter.messagebox as mb
@@ -52,8 +52,7 @@ def _export_combustion_to_excel(result, gas_name, composition, nox_result=None):
     if not path:
         return
     try:
-        export_combustion_to_excel(result, gas_name, composition, path,
-                                   nox_result=nox_result)
+        export_combustion_to_excel(result, gas_name, composition, path)
         mb.showinfo("完了", f"保存しました:\n{path}")
     except Exception as e:
         mb.showerror("エラー", str(e))
@@ -819,22 +818,6 @@ class OrificeCalculatorApp:
         lam_var = tk.DoubleVar(value=1.0)
         ttk.Entry(cond_frame, textvariable=lam_var, width=8).grid(row=0, column=5, padx=4)
 
-        # ── NOx計算条件フレーム ──
-        nox_frame = ttk.LabelFrame(win, text="サーマルNOx計算条件（追加パラメータ）")
-        nox_frame.pack(fill="x", padx=10, pady=(2, 4))
-
-        ttk.Label(nox_frame, text="瞬時流量 [Nm³/h]:").grid(row=0, column=0, padx=8, pady=4, sticky="e")
-        Q_var = tk.DoubleVar(value=5.0)
-        ttk.Entry(nox_frame, textvariable=Q_var, width=10).grid(row=0, column=1, padx=4)
-
-        ttk.Label(nox_frame, text="燃焼噴出径 [mm]:").grid(row=0, column=2, padx=8, sticky="e")
-        D_var = tk.DoubleVar(value=25.0)
-        ttk.Entry(nox_frame, textvariable=D_var, width=10).grid(row=0, column=3, padx=4)
-
-        ttk.Label(nox_frame, text="想定火炎長 [m]:").grid(row=0, column=4, padx=8, sticky="e")
-        L_var = tk.DoubleVar(value=0.3)
-        ttk.Entry(nox_frame, textvariable=L_var, width=10).grid(row=0, column=5, padx=4)
-
         # ── 結果フレーム ──
         result_frame = ttk.Frame(win)
         result_frame.pack(fill="both", expand=True, padx=10, pady=4)
@@ -935,7 +918,12 @@ class OrificeCalculatorApp:
             o2_self = t.get("o2_self_supplied_Nm3", 0.0)
             o2_line = (f"  成分中の自己供給O2: {o2_self:.4f} Nm³/Nm³ "
                        f"（外部空気量から差し引き済み）\n" if o2_self > 0 else "")
+            rho_mix = sum(
+                frac * result["components"].get(f, {}).get("density_kg_m3", 0.0)
+                for f, frac in comp.items()
+            )
             total_lbl.config(text=(
+                f"  密度: {rho_mix:.5f} kg/Nm³\n"
                 f"  HHV: {t['HHV_MJ_Nm3']:.4f} MJ/Nm³    "
                 f"LHV: {t['LHV_MJ_Nm3']:.4f} MJ/Nm³\n"
                 f"{o2_line}"
@@ -950,89 +938,10 @@ class OrificeCalculatorApp:
         ttk.Button(cond_frame, text="再計算",
                    command=recalc).grid(row=0, column=6, padx=12)
 
-        # ── サーマルNOx 結果フレーム ──
-        nox_result_frame = ttk.LabelFrame(win, text="■ サーマルNOx推定結果（拡張Zeldovich + Cantera平衡）")
-        nox_result_frame.pack(fill="x", padx=10, pady=(4, 2))
-
-        nox_lbl = ttk.Label(nox_result_frame, text="← 上の条件を入力して「NOx計算」を押してください",
-                             font=("Consolas", 9), foreground="gray")
-        nox_lbl.pack(anchor="w", padx=12, pady=4)
-
-        nox_warn_lbl = ttk.Label(nox_result_frame, text="", font=("", 8),
-                                  foreground="darkorange", wraplength=880, justify="left")
-        nox_warn_lbl.pack(anchor="w", padx=12)
-
-        def calc_nox():
-            """サーマルNOx計算"""
-            try:
-                from core.combustion import calc_thermal_nox
-                T_K  = T_var.get() + 273.15
-                P_Pa = P_var.get() * 1000.0
-                lam  = max(lam_var.get(), 0.01)
-                Q    = Q_var.get()
-                D    = D_var.get()
-                L    = L_var.get()
-
-                if Q <= 0 or D <= 0 or L <= 0:
-                    messagebox.showwarning("入力エラー", "流量・噴出径・火炎長はすべて正の値を入力してください")
-                    return
-
-                nr = calc_thermal_nox(
-                    composition=comp,
-                    lambda_val=lam,
-                    T_K=T_K,
-                    P_Pa=P_Pa,
-                    Q_Nm3h=Q,
-                    D_burner_mm=D,
-                    L_flame_m=L,
-                )
-                win._last_nox = nr
-
-                eq_str = (f"{nr['NOx_equilibrium_ppm']:.1f} ppm"
-                          if nr.get("NOx_equilibrium_ppm") is not None
-                          else "N/A（gri30非対応成分含む）")
-
-                nox_lbl.config(foreground="black", text=(
-                    f"  燃料噴出速度:     {nr['v_fuel_ms']:.3f} m/s\n"
-                    f"  火炎滞留時間:     {nr['tau_ms']:.2f} ms\n"
-                    f"  断熱火炎温度:     {nr['T_adiabatic_C']:.1f} ℃\n"
-                    f"  ─────────────────────────────────────────\n"
-                    f"  NOx（Zeldovich推定）:  {nr['NOx_thermal_ppm']:.1f} ppm"
-                    f"  /  {nr['NOx_thermal_mg_Nm3']:.1f} mg/Nm³\n"
-                    f"  NOx（Cantera平衡上限）: {eq_str}\n"
-                    f"  ─────────────────────────────────────────\n"
-                    f"  計算手法: {nr['method']}"
-                ))
-
-                # 警告があればオレンジラベルに表示、なければクリア
-                warn_lines = list(nr.get("warnings", []))
-                # Cantera計算エラーがある場合は目立つよう先頭に配置
-                cantera_errs = [w for w in warn_lines if "Cantera計算エラー" in w]
-                other_warns  = [w for w in warn_lines if "Cantera計算エラー" not in w]
-                warn_text = "\n".join(
-                    [f"⚠ {w}" for w in cantera_errs] +
-                    [f"⚠ {w}" for w in other_warns]
-                )
-                nox_warn_lbl.config(
-                    text=warn_text,
-                    foreground="red" if cantera_errs else "darkorange"
-                )
-
-            except Exception as e:
-                import traceback
-                messagebox.showerror("NOx計算エラー",
-                    f"{e}\n\n{traceback.format_exc()}")
-
-        ttk.Button(nox_frame, text="NOx計算",
-                   command=calc_nox).grid(row=0, column=6, padx=12)
-
-        # Excel 出力（NOx込み）
+        # Excel 出力
         def _export():
             if hasattr(win, "_last_result"):
-                _export_combustion_to_excel(
-                    win._last_result, gas_name, comp,
-                    nox_result=getattr(win, "_last_nox", None),
-                )
+                _export_combustion_to_excel(win._last_result, gas_name, comp)
         ttk.Button(win, text="Excel 出力", command=_export).pack(pady=6)
 
         # 初期計算
