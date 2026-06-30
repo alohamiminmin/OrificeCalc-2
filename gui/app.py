@@ -95,7 +95,7 @@ class OrificeCalculatorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("オリフィス計算（完全機能・混合ガス対応版）")
-        self.root.geometry("1600x1000")
+        self.root.geometry("900x980")
 
         # 結果保持
         self.df_result = None
