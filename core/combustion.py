@@ -146,6 +146,40 @@ _CT_FUEL: Dict[str, str] = {
 }
 _OXIDIZER = "O2:0.2095, N2:0.7905, AR:0.0093"
 
+# ============================================================
+# 単独成分の最大層流燃焼速度（文献値, 298 K・1 atm・空気中）
+#   sl_max_cm_s : 最大層流燃焼速度 [cm/s]
+#   phi_at_max  : 最大値が現れる当量比 φ（炭化水素系は φ≈1.05〜1.1付近、
+#                 水素・一酸化炭素は化学量論からかなり外れた燃料過剰側
+#                 （φ≈1.7〜1.8）で最大となることに注意）
+#   note        : 値の出典・前提条件に関する注記
+#
+# 出典の目安:
+#   CH4, H2     : 利用者指定値（一般的な文献値とも一致）
+#   C2H6, C3H8  : Law, Combustion Physics ほか標準的に引用される値
+#   CO          : 乾燥状態の CO は自己伝播しないため、文献値は
+#                 飽和水分（湿り）条件下での値を指す
+# ============================================================
+_LAMINAR_SL_LITERATURE: Dict[str, Dict[str, object]] = {
+    "CH4": {"sl_max_cm_s": 39.2,  "phi_at_max": 1.05,
+            "note": "乾燥空気中、298 K・1 atm"},
+    "C2H6": {"sl_max_cm_s": 40.1,  "phi_at_max": 1.10,
+             "note": "乾燥空気中、298 K・1 atm"},
+    "C3H8": {"sl_max_cm_s": 45.5,  "phi_at_max": 1.10,
+             "note": "乾燥空気中、298 K・1 atm"},
+    "H2":  {"sl_max_cm_s": 282.0, "phi_at_max": 1.70,
+            "note": "乾燥空気中、298 K・1 atm。化学量論(φ=1.0)ではなく"
+                     "大幅な燃料過剰側で最大値となる"},
+    "CO":  {"sl_max_cm_s": 45.0,  "phi_at_max": 1.80,
+            "note": "乾燥 CO は自己伝播しないため、飽和水分（湿り）"
+                     "条件下での代表値。実際の値は系内の水分量に強く依存する"},
+}
+
+
+def get_literature_burning_velocity(formula: str) -> Optional[Dict[str, object]]:
+    """単独成分の文献最大層流燃焼速度を返す（計算不要・即時）。未対応なら None。"""
+    return _LAMINAR_SL_LITERATURE.get(formula)
+
 
 # ============================================================
 # 密度計算（CoolProp → 理想気体フォールバック）
@@ -406,6 +440,55 @@ def calc_mixture_combustion(composition: Dict[str, float],
     }
 
 
+def _build_gri30_mixture_with_air(gas, comp_norm: Dict[str, float],
+                                   lambda_val: float) -> Optional[str]:
+    """
+    混合ガス全体（可燃成分 + 不燃成分 + 燃料中の O2）と、外部から追加する
+    空気（理論空気量×λ から燃料中の O2 を差し引いた量）を混合した
+    Cantera 用組成文字列を返す。
+
+    gas は事前に gri30.yaml で構築済みの ct.Solution を渡す
+    （種名リストの参照のみに使用、状態は変更しない）。
+
+    gri30.yaml に存在しない成分（Ar, He, nC4H10 以上の重質炭化水素, DME 等）
+    が含まれる場合、または可燃成分が存在しない場合は None を返す。
+    """
+    species_names = set(gas.species_names)
+
+    # gri30 で扱えない成分が含まれている場合は計算不可
+    for formula, frac in comp_norm.items():
+        if frac <= 0:
+            continue
+        if formula in _CT_FUEL or formula in ("N2", "O2"):
+            continue
+        if formula in ("CO2", "H2O") and formula in species_names:
+            continue
+        # Ar・He・DME・C4 以上の炭化水素などは gri30 非対応
+        return None
+
+    # 必要な O2（可燃成分の完全燃焼に必要な量）
+    o2_required = sum(frac * _COMB[f][0]
+                       for f, frac in comp_norm.items() if f in _COMB)
+    if o2_required <= 0:
+        return None
+
+    o2_in_fuel = comp_norm.get("O2", 0.0)
+    o2_from_air = max(o2_required - o2_in_fuel, 0.0)
+    air_stoich = o2_from_air / AIR_O2_FRAC
+    air_actual = lambda_val * air_stoich
+
+    # 燃料ストリーム（1 mol 燃料ガス全体）+ 外部から追加する空気のみを混合
+    fuel_parts = {f: frac for f, frac in comp_norm.items() if frac > 0}
+    air_moles = {"O2": air_actual * AIR_O2_FRAC,
+                 "N2": air_actual * AIR_N2_FRAC,
+                 "AR": air_actual * 0.0093}
+    mix = dict(fuel_parts)
+    for k, v in air_moles.items():
+        mix[k] = mix.get(k, 0.0) + v
+
+    return ", ".join(f"{k}:{v}" for k, v in mix.items() if v > 0)
+
+
 def _calc_mixture_Tad_cantera(comp_norm: Dict[str, float],
                                lambda_val: float = 1.0,
                                T_K: float = 298.15,
@@ -420,47 +503,91 @@ def _calc_mixture_Tad_cantera(comp_norm: Dict[str, float],
     try:
         import cantera as ct
         gas = ct.Solution(_get_gri30_path())
-        species_names = set(gas.species_names)
-
-        # gri30 で扱えない成分が含まれている場合は解析近似に委ねる
-        for formula, frac in comp_norm.items():
-            if frac <= 0:
-                continue
-            if formula in _CT_FUEL or formula in ("N2", "O2"):
-                continue
-            if formula in ("CO2", "H2O") and formula in species_names:
-                continue
-            # Ar・He・DME・C4 以上の炭化水素などは gri30 非対応
+        mix_str = _build_gri30_mixture_with_air(gas, comp_norm, lambda_val)
+        if mix_str is None:
             return None
-
-        # 必要な O2（可燃成分の完全燃焼に必要な量）
-        o2_required = sum(frac * _COMB[f][0]
-                           for f, frac in comp_norm.items() if f in _COMB)
-        if o2_required <= 0:
-            return None
-
-        o2_in_fuel = comp_norm.get("O2", 0.0)
-        o2_from_air = max(o2_required - o2_in_fuel, 0.0)
-        air_stoich = o2_from_air / AIR_O2_FRAC
-        air_actual = lambda_val * air_stoich
-
-        # 燃料ストリーム（1 mol 燃料ガス全体）の組成
-        fuel_parts = {f: frac for f, frac in comp_norm.items() if frac > 0}
-
-        # 燃料ストリーム + 外部から追加する空気のみを混合
-        air_moles = {"O2": air_actual * AIR_O2_FRAC,
-                     "N2": air_actual * AIR_N2_FRAC,
-                     "AR": air_actual * 0.0093}
-        mix = dict(fuel_parts)
-        for k, v in air_moles.items():
-            mix[k] = mix.get(k, 0.0) + v
-
-        mix_str = ", ".join(f"{k}:{v}" for k, v in mix.items() if v > 0)
         gas.TPX = T_K, P_Pa, mix_str
         gas.equilibrate("HP")
         return round(gas.T - 273.15, 0)
     except Exception:
         return None
+
+
+def calc_mixture_burning_velocity(composition: Dict[str, float],
+                                   lambda_val: float = 1.0,
+                                   T_K: float = 298.15,
+                                   P_Pa: float = 101325.0) -> Dict[str, object]:
+    """
+    混合ガス全体の層流燃焼速度 [cm/s] を、指定された空気過剰率 λ における
+    1 点のみ Cantera の 1 次元自由伝播火炎（FreeFlame）で計算する。
+
+    断熱火炎温度の計算（化学平衡を解くだけ）と異なり、火炎構造（拡散・
+    対流・反応の釣り合い）を解く必要があるため計算コストが大きく
+    （成分数や格子細分化条件にもよるが概ね 10〜30 秒程度）、呼び出し元
+    （GUI）はこれを明示的なボタン操作でのみ呼び出すこと。
+
+    Parameters
+    ----------
+    composition : {formula: mol_fraction}（合計 1.0 に正規化される）
+    lambda_val  : 空気過剰率 λ（外部から追加する空気にのみ適用）
+    T_K, P_Pa   : 初期温度・圧力
+
+    Returns
+    -------
+    {
+        "ok": bool,
+        "Sl_cm_s": float | None,       # 計算成功時の層流燃焼速度
+        "reason": str | None,          # 計算不可・失敗時の理由（日本語）
+    }
+    """
+    total = sum(composition.values())
+    if total <= 0:
+        return {"ok": False, "Sl_cm_s": None, "reason": "組成が空です"}
+    comp_norm = {k: v / total for k, v in composition.items()}
+
+    try:
+        import cantera as ct
+    except Exception:
+        return {"ok": False, "Sl_cm_s": None,
+                "reason": "Cantera が利用できません"}
+
+    try:
+        gas = ct.Solution(_get_gri30_path())
+        mix_str = _build_gri30_mixture_with_air(gas, comp_norm, lambda_val)
+        if mix_str is None:
+            unsupported = sorted(
+                f for f, frac in comp_norm.items()
+                if frac > 0 and f not in _CT_FUEL
+                and f not in ("N2", "O2", "CO2", "H2O")
+            )
+            if unsupported:
+                reason = ("層流燃焼速度の計算に対応していない成分が含まれて"
+                          f"います: {', '.join(unsupported)}"
+                          "（対応成分: CH4, C2H6, C3H8, H2, CO とその希釈成分"
+                          "[N2, CO2, O2, H2O] のみ）")
+            else:
+                reason = "可燃性成分が含まれていないため計算できません"
+            return {"ok": False, "Sl_cm_s": None, "reason": reason}
+
+        gas.TPX = T_K, P_Pa, mix_str
+
+        # 1 次元自由伝播火炎（FreeFlame）を解いて燃焼速度を求める
+        width = 0.03  # m, 初期計算幅（gri30 標準的な炭化水素・水素系火炎で妥当）
+        flame = ct.FreeFlame(gas, width=width)
+        flame.set_refine_criteria(ratio=3, slope=0.06, curve=0.12)
+        flame.solve(loglevel=0, auto=True)
+
+        Sl_m_s = flame.velocity[0]
+        if Sl_m_s is None or Sl_m_s <= 0:
+            return {"ok": False, "Sl_cm_s": None,
+                    "reason": "燃焼速度の解が収束しませんでした"
+                    "（極端に薄い・濃い組成の可能性があります）"}
+
+        return {"ok": True, "Sl_cm_s": round(float(Sl_m_s) * 100, 2), "reason": None}
+
+    except Exception as e:
+        return {"ok": False, "Sl_cm_s": None,
+                "reason": f"計算中にエラーが発生しました: {e}"}
 
 
 def _calc_mixture_Tad_analytical(comp_norm: Dict[str, float],

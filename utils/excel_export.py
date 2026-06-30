@@ -122,13 +122,21 @@ def _write_composition_sheet(writer, mixture_composition, gas_name=""):
 
 
 def export_combustion_to_excel(result: dict, gas_name: str,
-                                composition: dict, output_path: str = None) -> str:
-    """燃焼特性計算結果を Excel に出力"""
+                                composition: dict, output_path: str = None,
+                                mixture_sl_cm_s: float = None) -> str:
+    """
+    燃焼特性計算結果を Excel に出力
+
+    mixture_sl_cm_s : 混合ガス全体の層流燃焼速度 [cm/s]（GUI 側で
+                       「燃焼速度を計算」ボタンを押して計算済みの場合のみ
+                       渡される。未計算なら None で、Excel 側も空欄になる）
+    """
     if output_path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = f"./combustion_{ts}.xlsx"
 
     from core.gas_database import COMPONENT_DATABASE
+    from core.combustion import get_literature_burning_velocity
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
 
@@ -145,6 +153,7 @@ def export_combustion_to_excel(result: dict, gas_name: str,
             is_c = bool(r and r.get("is_combustible"))
             exh = r.get("exhaust_composition", {}) if r else {}
             rho = r.get("density_kg_m3", "") if r else ""
+            sl_lit = get_literature_burning_velocity(formula)
             rows_comp.append({
                 "成分（式）":   formula,
                 "成分名":       COMPONENT_DATABASE.get(formula, {}).get("name", formula),
@@ -162,6 +171,8 @@ def export_combustion_to_excel(result: dict, gas_name: str,
                 "排ガスSO2 [%]": exh.get("SO2", "") if is_c else "",
                 "排ガスN2 [%]":  exh.get("N2",  "") if is_c else "",
                 "断熱火炎温度 [℃]": r["T_adiabatic_C"] if is_c else "",
+                "最大燃焼速度 [cm/s]（文献値）": sl_lit["sl_max_cm_s"] if sl_lit else "",
+                "φ@最大燃焼速度":               sl_lit["phi_at_max"]  if sl_lit else "",
                 "可燃性": "○" if is_c else "×",
                 "備考": ("自己供給酸化剤" if formula == "O2" else
                          "希釈成分" if formula in ("N2", "CO2", "Ar", "He", "H2O") else ""),
@@ -189,6 +200,8 @@ def export_combustion_to_excel(result: dict, gas_name: str,
             "排ガスAr [%]":   exh_t.get("Ar",  ""),
             "排ガスHe [%]":   exh_t.get("He",  ""),
             "断熱火炎温度 [℃]": t.get("T_adiabatic_C", ""),
+            "混合ガス層流燃焼速度 [cm/s]（設定λ条件）":
+                round(mixture_sl_cm_s, 2) if mixture_sl_cm_s is not None else "",
         }]
         pd.DataFrame(rows_total).to_excel(writer, sheet_name="トータル燃焼特性", index=False)
 

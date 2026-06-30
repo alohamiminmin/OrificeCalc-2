@@ -4,6 +4,7 @@
 import os
 import sys
 import logging
+import threading
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -66,7 +67,7 @@ MATERIAL_OPTIONS = [
 ]
 
 
-def _export_combustion_to_excel(result, gas_name, composition):
+def _export_combustion_to_excel(result, gas_name, composition, mixture_sl_cm_s=None):
     """燃焼特性の Excel 出力（モジュールレベルヘルパー）"""
     import tkinter.filedialog as fd
     import tkinter.messagebox as mb
@@ -83,7 +84,8 @@ def _export_combustion_to_excel(result, gas_name, composition):
     if not path:
         return
     try:
-        export_combustion_to_excel(result, gas_name, composition, path)
+        export_combustion_to_excel(result, gas_name, composition, path,
+                                    mixture_sl_cm_s=mixture_sl_cm_s)
         mb.showinfo("完了", f"保存しました:\n{path}")
     except Exception as e:
         mb.showerror("エラー", str(e))
@@ -95,7 +97,7 @@ class OrificeCalculatorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("オリフィス計算（完全機能・混合ガス対応版）")
-        self.root.geometry("900x980")
+        self.root.geometry("1600x1000")
 
         # 結果保持
         self.df_result = None
@@ -800,7 +802,11 @@ class OrificeCalculatorApp:
     def show_combustion(self):
         """燃焼特性ウィンドウを表示（T/P/λ 設定付き）"""
         try:
-            from core.combustion import calc_mixture_combustion
+            from core.combustion import (
+                calc_mixture_combustion,
+                get_literature_burning_velocity,
+                calc_mixture_burning_velocity,
+            )
             from core.gas_database import COMPONENT_DATABASE
         except ImportError as e:
             messagebox.showerror("エラー", f"Cantera が必要です:\npip install cantera\n\n{e}")
@@ -829,7 +835,7 @@ class OrificeCalculatorApp:
         # ── ウィンドウ ──
         win = tk.Toplevel(self.root)
         win.title(f"燃焼特性 — {gas_name}")
-        win.geometry("960x820")
+        win.geometry("960x900")
         win.resizable(True, True)
 
         # ── 条件入力フレーム（燃焼特性） ──
@@ -872,6 +878,8 @@ class OrificeCalculatorApp:
             "N2[%]",
             "SO2[%]",
             "断熱火炎温度[℃]",
+            "最大燃焼速度[cm/s]",
+            "φ@最大",
         )
 
         tree_f = ttk.Frame(result_frame)
@@ -893,6 +901,59 @@ class OrificeCalculatorApp:
         total_lbl = ttk.Label(result_frame, text="", justify="left",
                               font=("Consolas", 9))
         total_lbl.pack(anchor="w", padx=16)
+
+        # ── 混合ガス全体の層流燃焼速度（重い計算のため明示ボタン操作） ──
+        sl_frame = ttk.LabelFrame(result_frame, text="■ 混合ガス全体の燃焼速度")
+        sl_frame.pack(fill="x", padx=0, pady=(8, 4))
+
+        sl_result_lbl = ttk.Label(
+            sl_frame, justify="left", font=("Consolas", 9),
+            text="  未計算（左の「設定条件の空気比λで計算」ボタンを押してください）"
+        )
+        sl_result_lbl.pack(anchor="w", padx=8, pady=(2, 4))
+
+        def _run_burning_velocity():
+            T_K  = T_var.get() + 273.15
+            P_Pa = P_var.get() * 1000.0
+            lam  = max(lam_var.get(), 0.01)
+
+            sl_btn.config(state="disabled")
+            sl_result_lbl.config(
+                text="  計算中...（1 次元火炎構造を解くため数十秒〜1 分程度かかります。"
+                     "しばらくお待ちください）"
+            )
+
+            def worker():
+                res = calc_mixture_burning_velocity(
+                    comp, lambda_val=lam, T_K=T_K, P_Pa=P_Pa
+                )
+
+                def apply_result():
+                    sl_btn.config(state="normal")
+                    if res["ok"]:
+                        win._last_sl_cm_s = res["Sl_cm_s"]
+                        sl_result_lbl.config(text=(
+                            f"  層流燃焼速度 Sl = {res['Sl_cm_s']:.2f} cm/s"
+                            f"　（条件: T={T_var.get():.1f}℃, "
+                            f"P={P_var.get():.3f} kPa(abs), λ={lam:.2f}）"
+                        ))
+                    else:
+                        win._last_sl_cm_s = None
+                        sl_result_lbl.config(
+                            text=f"  計算できませんでした: {res['reason']}"
+                        )
+
+                # Tkinter の UI 更新は必ずメインスレッドから行う
+                win.after(0, apply_result)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        sl_btn = ttk.Button(
+            sl_frame,
+            text="⚠ 設定条件の空気比λで計算（重い処理・数十秒〜1分）",
+            command=_run_burning_velocity,
+        )
+        sl_btn.pack(anchor="w", padx=8, pady=(0, 6))
 
         def recalc():
             """条件変更時に再計算"""
@@ -921,6 +982,8 @@ class OrificeCalculatorApp:
                     elif formula in ("N2", "CO2", "Ar", "He", "H2O"):
                         disp_name += "（希釈成分）"
 
+                sl_lit = get_literature_burning_velocity(formula)
+
                 vals = (
                     formula,
                     disp_name,
@@ -937,6 +1000,8 @@ class OrificeCalculatorApp:
                     exh.get("N2","")  if is_c else "-",
                     exh.get("SO2","") if is_c else "-",
                     r.get("T_adiabatic_C","") if is_c else "-",
+                    sl_lit["sl_max_cm_s"] if sl_lit else "-",
+                    sl_lit["phi_at_max"]  if sl_lit else "-",
                 )
                 tree.insert("", "end", values=vals,
                             tags=("comb" if is_c else "inert",))
@@ -965,13 +1030,23 @@ class OrificeCalculatorApp:
             ))
             win._last_result = result
 
+            # 条件が変わった可能性があるため、燃焼速度の表示は未計算状態に戻す
+            # （古い条件での Sl 値が新しい T/P/λ の結果と混在して見えるのを防ぐ）
+            win._last_sl_cm_s = None
+            sl_result_lbl.config(
+                text="  未計算（「設定条件の空気比λで計算」ボタンを押してください）"
+            )
+
         ttk.Button(cond_frame, text="再計算",
                    command=recalc).grid(row=0, column=6, padx=12)
 
         # Excel 出力
         def _export():
             if hasattr(win, "_last_result"):
-                _export_combustion_to_excel(win._last_result, gas_name, comp)
+                _export_combustion_to_excel(
+                    win._last_result, gas_name, comp,
+                    mixture_sl_cm_s=getattr(win, "_last_sl_cm_s", None),
+                )
         ttk.Button(cond_frame, text="Excel 出力",
                    command=_export).grid(row=0, column=7, padx=12)
 
