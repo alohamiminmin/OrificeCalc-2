@@ -942,7 +942,8 @@ class OrificeCalculatorApp:
         def _export():
             if hasattr(win, "_last_result"):
                 _export_combustion_to_excel(win._last_result, gas_name, comp)
-        ttk.Button(win, text="Excel 出力", command=_export).pack(pady=6)
+        ttk.Button(cond_frame, text="Excel 出力",
+                   command=_export).grid(row=0, column=7, padx=12)
 
         # 初期計算
         recalc()
