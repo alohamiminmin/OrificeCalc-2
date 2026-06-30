@@ -2,6 +2,46 @@ import os
 import sys
 
 # ============================================================
+# 標準出力/標準エラーの安全化（--windowed ビルドの起動ハング対策）
+#
+# PyInstaller の --windowed / --noconsole でビルドした EXE は
+# コンソールを持たないため、環境によって sys.stdout / sys.stderr が
+# None、あるいは書き込みがブロックするストリームになることがある。
+# その状態でアプリ内のどこかで print() や traceback 出力が発生すると、
+# 書き込みが永久にブロックしたままメインスレッドが進まなくなり、
+# 「タスクマネージャー上はプロセスが起動しているのに、CPU使用率は
+# 低いままウィンドウが一切表示されない」という症状になる。
+#
+# 起動の最初の行で安全なログファイルへ付け替えておくことで、
+# アプリ内のどこで print() / traceback が呼ばれてもハングしないように
+# する。
+# ============================================================
+def _setup_safe_stdio() -> None:
+    needs_redirect = (
+        sys.stdout is None or sys.stderr is None
+        or not hasattr(sys.stdout, "write")
+        or not hasattr(sys.stderr, "write")
+    )
+    if not needs_redirect:
+        return
+
+    try:
+        if getattr(sys, "frozen", False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        log_path = os.path.join(base_dir, "orifice_calc.log")
+        log_file = open(log_path, "a", encoding="utf-8", buffering=1)
+    except Exception:
+        log_file = open(os.devnull, "w", encoding="utf-8")
+
+    sys.stdout = log_file
+    sys.stderr = log_file
+
+
+_setup_safe_stdio()
+
+# ============================================================
 # __pycache__ をシステムの一時フォルダに隔離
 # アプリフォルダ内に __pycache__ / .pyc が生成されなくなる
 # ============================================================

@@ -1,6 +1,9 @@
 # gui/app_with_mixture.py
 # 【完全統合版】完全な計算機能 + 混合ガスUI
 
+import os
+import sys
+import logging
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -25,6 +28,34 @@ from tksheet import Sheet
 #    print_uncertainty_summary,
 #)
 from utils.uncertainty_calculator_iso import add_iso_uncertainty_columns
+
+
+# ---------------------------------------------------------------
+# ログ設定
+#   --windowed（コンソール無し）の EXE では標準出力が存在しないため、
+#   計算経過やエラーは print() ではなく logging 経由でファイルへ出す。
+#   sys.stdout / sys.stderr の状態に左右されないため、
+#   PyInstaller の --windowed ビルドでも安全に動作する。
+# ---------------------------------------------------------------
+def _get_log_path() -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, "orifice_calc.log")
+
+
+logger = logging.getLogger("orifice_calc")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    try:
+        _handler = logging.FileHandler(_get_log_path(), encoding="utf-8")
+    except Exception:
+        _handler = logging.NullHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(_handler)
+
+
 
 
 MATERIAL_OPTIONS = [
@@ -464,17 +495,17 @@ class OrificeCalculatorApp:
                 elif self.current_mixture_props and isinstance(self.current_mixture_props, dict):
                     mixture_composition = self.current_mixture_props.get('composition')
 
-            print(f"\n{'='*70}")
-            print(f"【計算開始】流体: {gas_name}")
-            print(f"D={D_mm}mm, d={d_mm}mm, β={d_mm/D_mm:.4f}")
+            logger.info("=" * 70)
+            logger.info(f"【計算開始】流体: {gas_name}")
+            logger.info(f"D={D_mm}mm, d={d_mm}mm, β={d_mm/D_mm:.4f}")
             if mixture_composition:
-                print(f"組成: {', '.join([f'{k}:{v*100:.1f}%' for k, v in list(mixture_composition.items())])}")
-            print(f"{'='*70}\n")
+                logger.info(f"組成: {', '.join([f'{k}:{v*100:.1f}%' for k, v in list(mixture_composition.items())])}")
+            logger.info("=" * 70)
 
             # ---------------------------------------------------------
             # ISO 計算
             # ---------------------------------------------------------
-            print("ISO 計算実行中...")
+            logger.info("ISO 計算実行中...")
             df_iso, corr_iso, _, msg_iso = calculate_10steps_iso5167(
                 gas_name, D_mm, d_mm, "SUS304", "SGP",
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
@@ -483,7 +514,7 @@ class OrificeCalculatorApp:
             )
 
             if df_iso is None:
-                print(f"WARNING: ISO 計算で問題発生: {msg_iso}")
+                logger.warning(f"ISO 計算で問題発生: {msg_iso}")
                 cols = [
                     "差圧[kPa]", "流出係数C", "膨張補正係数ε",
                     "体積流量[m³/h]", "ノルマル流量[Nm³/h]",
@@ -501,7 +532,7 @@ class OrificeCalculatorApp:
             # ---------------------------------------------------------
             # JIS 計算
             # ---------------------------------------------------------
-            print("JIS 計算実行中...")
+            logger.info("JIS 計算実行中...")
             df_jis, corr_jis, _, msg_jis = calculate_10steps_iso5167(
                 gas_name, D_mm, d_mm, "SUS304", "SGP",
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
@@ -526,7 +557,7 @@ class OrificeCalculatorApp:
             # ---------------------------------------------------------
             # ASME 計算
             # ---------------------------------------------------------
-            print("ASME 計算実行中...")
+            logger.info("ASME 計算実行中...")
             df_asme, corr_asme, _, msg_asme = calculate_10steps_iso5167(
                 gas_name, D_mm, d_mm, "SUS304", "SGP",
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
@@ -667,9 +698,8 @@ class OrificeCalculatorApp:
             self.df_result = df_display
 
         except Exception as e:
-            messagebox.showerror("エラー", f"計算中にエラーが発生しました:\n{e}")
-            import traceback
-            print(traceback.format_exc())
+            logger.exception("計算中にエラーが発生しました")
+            messagebox.showerror("エラー", f"計算中にエラーが発生しました:\n{e}\n\n詳細は orifice_calc.log を確認してください。")
             return
 
     # ---------------------------------------------------------
