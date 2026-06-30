@@ -8,11 +8,6 @@ import pandas as pd
 import os
 from datetime import datetime
 
-#from utils.console_uncertainty_report import (
-#    generate_console_uncertainty_report,
-#    generate_uncertainty_trend_table
-#)
-
 
 
 def export_to_excel(
