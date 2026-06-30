@@ -1,6 +1,5 @@
 # gui/app_with_mixture.py
 # 【完全統合版】完全な計算機能 + 混合ガスUI
-#正常動作ロールバック
 
 from datetime import datetime
 import tkinter as tk

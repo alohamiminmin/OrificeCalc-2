@@ -10,7 +10,6 @@ core/combustion.py
   - 高位発熱量 HHV [MJ/Nm³]
   - 低位発熱量 LHV [MJ/Nm³]
   - 断熱火炎温度 [℃]（空気過剰率 λ 対応）
-  正常動作確認ロールバック
 """
 
 from __future__ import annotations
