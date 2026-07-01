@@ -60,3 +60,4 @@ desktop.ini
 output_*.xlsx
 combustion_*.xlsx
 .gitignore
+gui/__pycache__/app.cpython-314.pyc
