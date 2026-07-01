@@ -106,10 +106,6 @@ class OrificeCalculatorApp:
         # 前回設定を読み込み（ウィンドウ位置・入力値の復元に使用）
         self._prev_settings = self._load_settings()
 
-        # ウィンドウ位置・サイズを復元（前回保存済みの場合）
-        geom = self._prev_settings.get("geometry", "900x980")
-        self.root.geometry(geom)
-
         # 結果保持
         self.df_result = None
         self.correction_info = None
@@ -128,7 +124,28 @@ class OrificeCalculatorApp:
         self.current_mixture_props = None
         self.current_custom_composition = None  # カスタム組成を確実に保持するための変数
 
+        # 追従対象ウィンドウを管理するリスト（燃焼特性GUI・カスタムダイアログ共用）
+        # 要素: callable(mx, my, mw) → True(生存継続) / False(破棄済み・リストから除去)
+        self._configure_followers = []
+
         self._build_ui()
+
+        # ウィンドウ位置・サイズを _build_ui 完了後に復元（after_idle で確実に適用）
+        geom = self._prev_settings.get("geometry", "900x980")
+        self.root.after_idle(lambda: self.root.geometry(geom))
+
+        # <Configure> を1本に集約 ── 全追従ウィンドウをまとめて更新
+        def _on_configure(event=None):
+            if event is not None and event.widget is not self.root:
+                return  # 子ウィジェットのイベントは無視
+            self.root.update_idletasks()
+            mx = self.root.winfo_x()
+            my = self.root.winfo_y()
+            mw = self.root.winfo_width()
+            self._configure_followers = [
+                f for f in self._configure_followers if f(mx, my, mw)
+            ]
+        self.root.bind("<Configure>", _on_configure)
 
         # ×ボタンで設定を保存してから終了
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -420,8 +437,23 @@ class OrificeCalculatorApp:
                                        get_mixture_composition)
         dialog = tk.Toplevel(self.root)
         dialog.title("カスタム混合ガス作成")
-        dialog.geometry("340x640")
         dialog.resizable(False, True)
+
+        # オリフィスGUI左隣に初期配置
+        self.root.update_idletasks()
+        _dx0 = self.root.winfo_x()
+        _dy0 = self.root.winfo_y()
+        dialog.geometry(f"340x640+{_dx0 - 340 - 4}+{_dy0}")
+
+        def _follower_dialog(mx, my, mw):
+            if not dialog.winfo_exists():
+                return False
+            dh = dialog.winfo_height()
+            dialog.geometry(f"340x{dh}+{mx - 340 - 4}+{my}")
+            return True
+
+        self._configure_followers.append(_follower_dialog)
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
         dialog.grab_set()
 
         # タイトル
@@ -950,20 +982,18 @@ class OrificeCalculatorApp:
             mw = self.root.winfo_width()
             win.geometry(f"960x900+{mx + mw + 4}+{my}")
 
-        def _follow_main(event=None):
+        _place_beside_main()
+
+        def _follower_combustion(mx, my, mw):
             if not win.winfo_exists():
-                return
-            mx = self.root.winfo_x()
-            my = self.root.winfo_y()
-            mw = self.root.winfo_width()
+                return False
             ww = win.winfo_width()
             wh = win.winfo_height()
             win.geometry(f"{ww}x{wh}+{mx + mw + 4}+{my}")
+            return True
 
-        _place_beside_main()
-        self.root.bind("<Configure>", _follow_main)
-        win.protocol("WM_DELETE_WINDOW",
-                     lambda: [self.root.unbind("<Configure>"), win.destroy()])
+        self._configure_followers.append(_follower_combustion)
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
 
         # ── 条件入力フレーム（燃焼特性） ──
         cond_frame = ttk.LabelFrame(win, text="計算条件（燃焼特性）")
