@@ -1,0 +1,21 @@
+{
+  "geometry": "900x980+-1889+-96",
+  "fluid_mode": "custom",
+  "gas_name": "カスタム混合ガス",
+  "pipe_mat": "SGP",
+  "plate_mat": "SUS304",
+  "pipe_size": "SGP 50A 2B",
+  "D": 52.9,
+  "d": 13.0,
+  "P1": 111.3,
+  "deltaP": 10.0,
+  "T": 20.0,
+  "z_model": "HEOS",
+  "custom_comp": {
+    "CH4": 0.8959999999999999,
+    "C2H6": 0.055999999999999994,
+    "C3H8": 0.034,
+    "nC4H10": 0.01,
+    "iC4H10": 0.004
+  }
+}
