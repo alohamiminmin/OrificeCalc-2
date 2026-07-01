@@ -899,6 +899,13 @@ class OrificeCalculatorApp:
 
     def show_combustion(self):
         """燃焼特性ウィンドウを表示（T/P/λ 設定付き）"""
+        # ── 既存ウィンドウが開いていれば前面に出して終了 ──
+        existing = getattr(self, "_combustion_win", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+
         try:
             from core.combustion import (
                 calc_mixture_combustion,
@@ -932,6 +939,7 @@ class OrificeCalculatorApp:
 
         # ── ウィンドウ（オリフィスGUI右隣に配置し移動に追従） ──
         win = tk.Toplevel(self.root)
+        self._combustion_win = win  # 多重起動防止用に保持
         win.title(f"燃焼特性 — {gas_name}")
         win.resizable(True, True)
 
