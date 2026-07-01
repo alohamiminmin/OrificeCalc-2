@@ -424,6 +424,32 @@ def calc_mixture_combustion(composition: Dict[str, float],
             co2_total, h2o_total, so2_total,
         )
 
+    # ── 混合ガス密度（0℃, 101.325 kPa 基準）──
+    # coolprop_models の _build_state で混合ガスを一括投入し HEOS で実在気体密度を計算。
+    # これによりオリフィス計算側と同一の手法（GERG-2008 相互作用項込み）になる。
+    # CoolProp 未対応成分が含まれる場合は成分別加重平均にフォールバック。
+    _T_NM3 = 273.15          # 0℃ [K]
+    _P_NM3 = 101_325.0       # 101.325 kPa [Pa]
+    rho_mix_total: Optional[float] = None
+    try:
+        from core.coolprop_models import _build_state, _update_with_phase_fallback
+        _gas_prop_mix = {"composition": comp_norm}
+        _AS = _build_state("HEOS", _gas_prop_mix)
+        if _AS is not None and _update_with_phase_fallback(_AS, _P_NM3, _T_NM3):
+            _rho = _AS.rhomass()
+            if _rho and _rho > 0:
+                rho_mix_total = round(float(_rho), 6)
+    except Exception:
+        pass
+    # フォールバック: 成分別純物質密度の加重平均
+    if rho_mix_total is None:
+        _rho_sum = 0.0
+        for _f, _x in comp_norm.items():
+            _rho_c = results.get(_f, {}).get("density_kg_m3")
+            if _rho_c:
+                _rho_sum += _x * _rho_c
+        rho_mix_total = round(_rho_sum, 6) if _rho_sum > 0 else None
+
     return {
         "components": results,
         "total": {
@@ -436,6 +462,7 @@ def calc_mixture_combustion(composition: Dict[str, float],
             "exhaust_composition": exh_comp_t,
             "T_adiabatic_C":       Tad_mix,
             "o2_self_supplied_Nm3": round(o2_in_fuel, 4),
+            "density_kg_m3":       rho_mix_total,   # 0℃/101.325kPa, HEOS混合則
         }
     }
 
