@@ -236,6 +236,11 @@ class OrificeCalculatorApp:
         self.d_entry.grid(row=3, column=4, padx=5, pady=5)
         self.d_entry.bind("<KeyRelease>", self._on_D_changed)
 
+        ttk.Label(frame, text="板厚t[mm]:").grid(row=3, column=5, sticky="e", padx=5)
+        self.plate_t_var = tk.DoubleVar(value=1.0)
+        ttk.Entry(frame, textvariable=self.plate_t_var, width=8, font=("Arial", 11)).grid(
+            row=3, column=6, padx=5, pady=5)
+
         # 入力値確認表示
         self.label_input_display = ttk.Label(frame, text="", foreground="blue", 
                                              font=("Arial", 10, "bold"), background="lightyellow")
@@ -308,6 +313,7 @@ class OrificeCalculatorApp:
                     ("P1",     self.P1_var),
                     ("deltaP", self.deltaP_var),
                     ("T",      self.T_var),
+                    ("plate_t",self.plate_t_var),
                 ]:
                     if key in s:
                         var.set(float(s[key]))
@@ -361,6 +367,7 @@ class OrificeCalculatorApp:
                 "P1":          self.P1_var.get(),
                 "deltaP":      self.deltaP_var.get(),
                 "T":           self.T_var.get(),
+                "plate_t":     self.plate_t_var.get(),
                 "z_model":     self.z_model_var.get(),
                 "custom_comp": self.current_custom_composition,
             }
@@ -634,6 +641,14 @@ class OrificeCalculatorApp:
                 logger.info(f"組成: {', '.join([f'{k}:{v*100:.1f}%' for k, v in list(mixture_composition.items())])}")
             logger.info("=" * 70)
 
+            # プレート厚みを取得
+            try:
+                plate_t_mm = float(self.plate_t_var.get())
+                if plate_t_mm <= 0:
+                    plate_t_mm = None
+            except Exception:
+                plate_t_mm = None
+
             # ---------------------------------------------------------
             # ISO 計算
             # ---------------------------------------------------------
@@ -642,7 +657,8 @@ class OrificeCalculatorApp:
                 gas_name, D_mm, d_mm, "SUS304", "SGP",
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
                 include_uncertainty=True, mode="ISO_RHG",
-                mixture_composition=mixture_composition
+                mixture_composition=mixture_composition,
+                plate_thickness_mm=plate_t_mm,
             )
 
             if df_iso is None:
@@ -669,7 +685,8 @@ class OrificeCalculatorApp:
                 gas_name, D_mm, d_mm, "SUS304", "SGP",
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
                 include_uncertainty=False, mode="JIS_Z8762",
-                mixture_composition=mixture_composition
+                mixture_composition=mixture_composition,
+                plate_thickness_mm=plate_t_mm,
             )
 
             if df_jis is None:
@@ -694,7 +711,8 @@ class OrificeCalculatorApp:
                 gas_name, D_mm, d_mm, "SUS304", "SGP",
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
                 include_uncertainty=False, mode="ASME_MFC14M",
-                mixture_composition=mixture_composition
+                mixture_composition=mixture_composition,
+                plate_thickness_mm=plate_t_mm,
             )
 
             if df_asme is None:

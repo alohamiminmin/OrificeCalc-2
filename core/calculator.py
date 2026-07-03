@@ -23,6 +23,7 @@ from core.gas_database import (
 )
 from core.iso5167_rhg import (
     calculate_iso5167_with_rhg_uncertainty,
+    calc_thick_plate_C_correction,
 )
 from core.asme_mfc14m import (
     _calculate_asme_mfc14m_single_point,
@@ -229,6 +230,7 @@ def _calculate_single_point_iso5167(
     mixture_composition: Optional[Dict[str, float]] = None,
     include_uncertainty: bool = True,
     mode: str = "ISO_RHG",
+    plate_thickness_mm: Optional[float] = None,   # ← プレート厚み追加
 ):
 
     common = _prepare_common_state(
@@ -359,6 +361,20 @@ def _calculate_single_point_iso5167(
     Qv_m3h = last_result.get("Qv_m3h", None)
     uncertainty = last_result.get("uncertainty", None)
 
+    # ── プレート厚み補正（Spink 1978 / ISO TR 15377）──
+    thick_corr_detail = None
+    if plate_thickness_mm is not None and plate_thickness_mm > 0:
+        k_corr, thick_corr_detail = calc_thick_plate_C_correction(
+            t_mm=plate_thickness_mm,
+            d_mm=d_corr,
+            D_mm=D_corr,
+        )
+        if C_iso is not None and k_corr != 1.0:
+            C_iso = C_iso * k_corr
+            # Qv も同比率で補正（C に比例）
+            if Qv_m3h is not None:
+                Qv_m3h = Qv_m3h * k_corr
+
     # 永久圧力損失
     if mode in ("ISO_RHG", "JIS_Z8762"):
         ppl_Pa = calc_permanent_pressure_loss_iso_jis(beta_orig, deltaP_Pa)
@@ -412,6 +428,7 @@ def _calculate_single_point_iso5167(
         "β基準→補正": f"{beta_orig:.5f} → {beta_corr:.5f} ({rate_beta:.5f}%)",
         "補正後D[mm]": D_corr,
         "補正後d[mm]": d_corr,
+        "プレート厚み補正": thick_corr_detail,
     }
 
     return pd.DataFrame([row]), common["corr"], correction_info, "OK"
@@ -434,6 +451,7 @@ def calculate_10steps_iso5167(
     mixture_composition: Optional[Dict[str, float]] = None,
     include_uncertainty: bool = True,
     mode: str = "ISO_RHG",
+    plate_thickness_mm: Optional[float] = None,   # ← プレート厚み追加
 ):
 
     rows = []
@@ -450,6 +468,7 @@ def calculate_10steps_iso5167(
             mixture_composition,
             include_uncertainty,
             mode=mode,
+            plate_thickness_mm=plate_thickness_mm,   # ← 渡す
         )
 
         if correction_info_first is None:
