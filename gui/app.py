@@ -131,8 +131,12 @@ class OrificeCalculatorApp:
         self._build_ui()
 
         # ウィンドウ位置・サイズを _build_ui 完了後に復元（after_idle で確実に適用）
+        # 環境変化（モニター解像度変更・デュアルモニター解除等）で画面外に
+        # なっていた場合は _clamp_geometry_to_screen が現在の画面内に補正する。
         geom = self._prev_settings.get("geometry", "900x980")
-        self.root.after_idle(lambda: self.root.geometry(geom))
+        self.root.after_idle(lambda: self.root.geometry(
+            self._clamp_geometry_to_screen(geom)
+        ))
 
         # <Configure> を1本に集約 ── 全追従ウィンドウをまとめて更新
         def _on_configure(event=None):
@@ -342,6 +346,47 @@ class OrificeCalculatorApp:
     # ---------------------------------------------------------
     # 設定の保存・読込
     # ---------------------------------------------------------
+    def _clamp_geometry_to_screen(self, geom_str: str) -> str:
+        """
+        geometry文字列（例 "900x980+1920+100"）が現在の画面外に
+        はみ出している場合、画面内に収まるよう位置・サイズを補正する。
+
+        用途: モニター構成が変わった（デュアルモニター解除、解像度変更、
+        別PCへの移設など）ために前回保存した座標が無効な位置を指すように
+        なった場合の自動リカバリー。
+        """
+        import re
+        try:
+            m = re.match(r"^(\d+)x(\d+)([+-]\d+)([+-]\d+)$", geom_str.strip())
+            if not m:
+                return geom_str  # パース不能な文字列はそのまま返す（デフォルト任せ）
+
+            w, h = int(m.group(1)), int(m.group(2))
+            x, y = int(m.group(3)), int(m.group(4))
+
+            self.root.update_idletasks()
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+
+            # ウィンドウサイズが画面より大きい場合は画面に収まるよう縮小
+            w = max(400, min(w, sw))
+            h = max(300, min(h, sh))
+
+            # ウィンドウ原点(x,y)が画面内に収まる有効範囲 [0, sw-w] x [0, sh-h]
+            # から外れている場合は「画面外」とみなし中央寄せに補正する。
+            # （右端だけ画面内に見えている等の部分的なはみ出しも補正対象に含める）
+            max_x = max(0, sw - w)
+            max_y = max(0, sh - h)
+
+            if x < 0 or x > max_x:
+                x = max(0, (sw - w) // 2)
+            if y < 0 or y > max_y:
+                y = max(0, (sh - h) // 2)
+
+            return f"{w}x{h}+{x}+{y}"
+        except Exception:
+            return "900x980"  # 補正処理自体が失敗した場合は安全なデフォルトへ
+
     def _load_settings(self) -> dict:
         """前回の設定を読み込む。ファイルが無い・壊れている場合は空dictを返す"""
         import json
@@ -641,7 +686,7 @@ class OrificeCalculatorApp:
                 logger.info(f"組成: {', '.join([f'{k}:{v*100:.1f}%' for k, v in list(mixture_composition.items())])}")
             logger.info("=" * 70)
 
-            # プレート厚みを取得
+            # プレート厚み（未入力・0以下は補正なし扱い）
             try:
                 plate_t_mm = float(self.plate_t_var.get())
                 if plate_t_mm <= 0:

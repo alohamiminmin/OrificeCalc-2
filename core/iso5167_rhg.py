@@ -145,6 +145,16 @@ def calculate_iso5167_with_rhg_uncertainty(
     except Exception:
         Qv_m3h = None
 
+    result = {
+        "status": "SUCCESS",
+        "C_iso": C,
+        "epsilon": epsilon,
+        "Qv_m3h": Qv_m3h,
+        "Re": Re,
+        "uncertainty": None
+    }
+
+    return result
 
 
 # ============================================================
@@ -224,4 +234,3 @@ def calc_thick_plate_C_correction(
 
     except Exception as ex:
         return 1.0, {"status": f"計算エラー: {ex}", "k_corr": 1.0}
-

@@ -230,7 +230,7 @@ def _calculate_single_point_iso5167(
     mixture_composition: Optional[Dict[str, float]] = None,
     include_uncertainty: bool = True,
     mode: str = "ISO_RHG",
-    plate_thickness_mm: Optional[float] = None,   # ← プレート厚み追加
+    plate_thickness_mm: Optional[float] = None,   # ← プレート厚み
 ):
 
     common = _prepare_common_state(
@@ -371,7 +371,7 @@ def _calculate_single_point_iso5167(
         )
         if C_iso is not None and k_corr != 1.0:
             C_iso = C_iso * k_corr
-            # Qv も同比率で補正（C に比例）
+            # Qv は C に比例するため同じ係数で補正
             if Qv_m3h is not None:
                 Qv_m3h = Qv_m3h * k_corr
 
@@ -403,6 +403,11 @@ def _calculate_single_point_iso5167(
         "永久圧力損失[kPa]": None if ppl_Pa is None else ppl_Pa / 1000.0,
         "永久圧力損失比ΔPperm/ΔP": None if ppl_Pa is None else ppl_Pa / max(deltaP_Pa, 1e-12),
     }
+
+    if thick_corr_detail is not None:
+        row["板厚t[mm]"] = plate_thickness_mm
+        row["板厚補正係数k"] = thick_corr_detail.get("k_corr")
+        row["板厚補正Δα[%]"] = thick_corr_detail.get("delta_C_pct")
 
     if include_uncertainty and uncertainty:
         u = uncertainty
@@ -451,7 +456,7 @@ def calculate_10steps_iso5167(
     mixture_composition: Optional[Dict[str, float]] = None,
     include_uncertainty: bool = True,
     mode: str = "ISO_RHG",
-    plate_thickness_mm: Optional[float] = None,   # ← プレート厚み追加
+    plate_thickness_mm: Optional[float] = None,   # ← プレート厚み
 ):
 
     rows = []
