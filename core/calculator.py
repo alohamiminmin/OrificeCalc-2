@@ -167,17 +167,31 @@ def _prepare_common_state(
     T_K = T_degC + 273.15
 
     Z_func = Z_MODELS.get(z_model_name, lambda P, T, prop: 1.0)
+    Z_error = None
     try:
         Z = Z_func(P1_Pa, T_K, gas_prop)
         Z_n = Z_func(P_NORM, T_NORM, gas_prop)
-    except Exception:
+    except Exception as ex:
         Z = None
         Z_n = None
+        Z_error = f"{type(ex).__name__}: {ex}"
+
+    # Z が None になった場合、CoolProp系モデルなら詳細な失敗理由を取得する
+    if Z is None and z_model_name != "理想気体":
+        if Z_error is None:
+            try:
+                from core.coolprop_models import get_last_z_error
+                Z_error = get_last_z_error()
+            except Exception:
+                Z_error = None
+        if Z_error is None:
+            Z_error = f"{z_model_name}モデルがNoneを返しました（原因不明）"
 
     rho = calc_density(P1_Pa, T_K, M_kg, Z)
 
     corr["密度ρ[kg/m³]"]  = rho
     corr["圧縮係数Z"]     = Z      # ← テーブル表示・_ensure_z_column で参照
+    corr["Z計算エラー"]   = Z_error
 
     # 補正情報を corr に格納（GUI 等で参照しやすくする）
     corr["補正後D[mm]"] = D_corr
@@ -208,6 +222,7 @@ def _prepare_common_state(
         "T_K": T_K,
         "Z": Z,
         "Z_n": Z_n,
+        "Z_error": Z_error,
         "rho": rho,
         "corr": corr,
     }
@@ -257,6 +272,7 @@ def _calculate_single_point_iso5167(
     T_K = common["T_K"]
     Z = common["Z"]
     Z_n = common["Z_n"]
+    Z_error = common.get("Z_error")
     rho = common["rho"]
 
     # Re 収束ループ（300回）
@@ -395,6 +411,7 @@ def _calculate_single_point_iso5167(
         "レイノルズ数Re": Re,
         "密度ρ[kg/m³]": rho,
         "圧縮係数Z": Z,
+        "Z計算エラー": Z_error,
         "β": beta_corr,
         "補正後D[mm]": D_corr,
         "補正後d[mm]": d_corr,

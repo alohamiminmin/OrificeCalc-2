@@ -138,21 +138,47 @@ def _update_with_phase_fallback(AS, P_Pa: float, T: float) -> bool:
         return False
 
 
+# ============================================================
+# 直近のZ計算失敗理由（診断用）
+#   CoolProp呼び出しの例外は握りつぶして None を返す設計のため、
+#   「なぜNoneになったか」をGUI側で表示できるようにここに保持する。
+#   tkinterはシングルスレッドGUIのため、グローバル変数で問題ない。
+# ============================================================
+_last_z_error: Optional[str] = None
+
+
+def get_last_z_error() -> Optional[str]:
+    """直近の calc_Z_* 呼び出しでZがNoneになった理由を返す（無ければNone）。"""
+    return _last_z_error
+
+
 def _calc_Z_backend(backend: str, P_Pa: float, T: float,
                      gas_prop: Dict[str, Any]) -> Optional[float]:
+    global _last_z_error
+    _last_z_error = None
     try:
         if P_Pa is None or T is None or T <= 0 or P_Pa <= 0:
+            _last_z_error = f"圧力または温度が不正です (P={P_Pa}, T={T})"
             return None
         AS = _build_state(backend, gas_prop)
         if AS is None:
+            _last_z_error = ("CoolPropが対応する流体名を解決できませんでした"
+                              "（未対応成分が含まれる可能性があります）")
             return None
         if not _update_with_phase_fallback(AS, P_Pa, T):
+            _last_z_error = ("CoolPropの状態計算(update)に失敗しました"
+                              "（相領域外・過飽和の可能性）")
             return None
         Z = AS.compressibility_factor()
         if Z is None or Z <= 0:
+            _last_z_error = f"CoolPropが不正なZ値を返しました: {Z}"
             return None
         return float(Z)
-    except Exception:
+    except ModuleNotFoundError as ex:
+        _last_z_error = f"CoolPropがインストールされていません: {ex}"
+        return None
+    except Exception as ex:
+        _last_z_error = f"{backend}計算で例外発生: {type(ex).__name__}: {ex}"
         return None
 
 

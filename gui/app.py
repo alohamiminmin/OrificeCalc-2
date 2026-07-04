@@ -807,7 +807,8 @@ class OrificeCalculatorApp:
                         row.get("β"), row.get("補正後D[mm]"),
                         row.get("レイノルズ数Re"), row.get("圧縮係数Z"),
                         row.get("流出係数C"), row.get("膨張補正係数ε"),
-                        row.get("体積流量[m³/h]")
+                        row.get("体積流量[m³/h]"),
+                        row.get("Z計算エラー"),
                     )
                     fit_mark = "○" if ("適用範囲内" in note) else "×"
                     row_ordered = {
@@ -828,6 +829,7 @@ class OrificeCalculatorApp:
                 "体積流量[m³/h]", "ノルマル流量[Nm³/h]",
                 "レイノルズ数Re", "密度ρ[kg/m³]", "圧縮係数Z", "Zモデル",
                 "β", "補正後D[mm]", "補正後d[mm]",
+                "板厚t[mm]", "板厚補正係数k", "板厚補正Δα[%]",
                 #"計算モード", "永久圧力損失[Pa]", 
                 "永久圧力損失[kPa]",
                 #"永久圧力損失比ΔPperm/ΔP",
@@ -951,11 +953,14 @@ class OrificeCalculatorApp:
 
         return df
 
-    def _make_note(self, mode, beta, D, Re, Z, C, epsilon, Qv):
+    def _make_note(self, mode, beta, D, Re, Z, C, epsilon, Qv, z_error=None):
         notes = []
 
         if Z is None or pd.isnull(Z):
-            notes.append("Z が計算できません")
+            if z_error:
+                notes.append(f"Z計算失敗: {z_error}")
+            else:
+                notes.append("Z が計算できません")
         if C is None or pd.isnull(C):
             notes.append("流出係数Cが計算不能")
         if epsilon is None or pd.isnull(epsilon):
