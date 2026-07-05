@@ -694,12 +694,19 @@ class OrificeCalculatorApp:
             except Exception:
                 plate_t_mm = None
 
+            # 実際にGUIで選択されている材質を使用
+            # （旧実装は "SUS304"/"SGP" 固定文字列を渡しており、
+            #   プレート材質・配管材質の選択がプレート厚み補正・
+            #   たわみ計算・熱膨張補正に反映されない不具合があった）
+            plate_mat_sel = self.plate_mat_var.get()
+            pipe_mat_sel  = self.pipe_mat_var.get()
+
             # ---------------------------------------------------------
             # ISO 計算
             # ---------------------------------------------------------
             logger.info("ISO 計算実行中...")
             df_iso, corr_iso, _, msg_iso = calculate_10steps_iso5167(
-                gas_name, D_mm, d_mm, "SUS304", "SGP",
+                gas_name, D_mm, d_mm, plate_mat_sel, pipe_mat_sel,
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
                 include_uncertainty=True, mode="ISO_RHG",
                 mixture_composition=mixture_composition,
@@ -727,7 +734,7 @@ class OrificeCalculatorApp:
             # ---------------------------------------------------------
             logger.info("JIS 計算実行中...")
             df_jis, corr_jis, _, msg_jis = calculate_10steps_iso5167(
-                gas_name, D_mm, d_mm, "SUS304", "SGP",
+                gas_name, D_mm, d_mm, plate_mat_sel, pipe_mat_sel,
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
                 include_uncertainty=False, mode="JIS_Z8762",
                 mixture_composition=mixture_composition,
@@ -753,7 +760,7 @@ class OrificeCalculatorApp:
             # ---------------------------------------------------------
             logger.info("ASME 計算実行中...")
             df_asme, corr_asme, _, msg_asme = calculate_10steps_iso5167(
-                gas_name, D_mm, d_mm, "SUS304", "SGP",
+                gas_name, D_mm, d_mm, plate_mat_sel, pipe_mat_sel,
                 P1_kPa, max_deltaP_kPa, T_degC, z_model_name,
                 include_uncertainty=False, mode="ASME_MFC14M",
                 mixture_composition=mixture_composition,
@@ -830,6 +837,7 @@ class OrificeCalculatorApp:
                 "レイノルズ数Re", "密度ρ[kg/m³]", "圧縮係数Z", "Zモデル",
                 "β", "補正後D[mm]", "補正後d[mm]",
                 "板厚t[mm]", "板厚補正係数k", "板厚補正Δα[%]",
+                "たわみ量[mm]", "最大曲げ応力[MPa]",
                 #"計算モード", "永久圧力損失[Pa]", 
                 "永久圧力損失[kPa]",
                 #"永久圧力損失比ΔPperm/ΔP",

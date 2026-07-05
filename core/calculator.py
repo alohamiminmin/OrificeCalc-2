@@ -25,6 +25,7 @@ from core.iso5167_rhg import (
     calculate_iso5167_with_rhg_uncertainty,
     calc_thick_plate_C_correction,
 )
+from core.plate_deflection import calc_plate_deflection_stress
 from core.asme_mfc14m import (
     _calculate_asme_mfc14m_single_point,
 )
@@ -391,6 +392,20 @@ def _calculate_single_point_iso5167(
             if Qv_m3h is not None:
                 Qv_m3h = Qv_m3h * k_corr
 
+    # ── プレートたわみ量・最大曲げ応力（環状平板・外周固定/内周自由）──
+    #    差圧ΔPによりプレートを曲げる荷重として計算する
+    deflection_mm = None
+    max_stress_MPa = None
+    deflection_detail = None
+    if plate_thickness_mm is not None and plate_thickness_mm > 0:
+        deflection_mm, max_stress_MPa, deflection_detail = calc_plate_deflection_stress(
+            D_mm=D_corr,
+            d_mm=d_corr,
+            t_mm=plate_thickness_mm,
+            deltaP_kPa=deltaP_kPa,
+            plate_mat=plate_mat,
+        )
+
     # 永久圧力損失
     if mode in ("ISO_RHG", "JIS_Z8762"):
         ppl_Pa = calc_permanent_pressure_loss_iso_jis(beta_orig, deltaP_Pa)
@@ -426,6 +441,10 @@ def _calculate_single_point_iso5167(
         row["板厚補正係数k"] = thick_corr_detail.get("k_corr")
         row["板厚補正Δα[%]"] = thick_corr_detail.get("delta_C_pct")
 
+    if deflection_detail is not None:
+        row["たわみ量[mm]"] = deflection_mm
+        row["最大曲げ応力[MPa]"] = max_stress_MPa
+
     if include_uncertainty and uncertainty:
         u = uncertainty
         row.update({
@@ -451,6 +470,7 @@ def _calculate_single_point_iso5167(
         "補正後D[mm]": D_corr,
         "補正後d[mm]": d_corr,
         "プレート厚み補正": thick_corr_detail,
+        "プレートたわみ計算": deflection_detail,
     }
 
     return pd.DataFrame([row]), common["corr"], correction_info, "OK"
