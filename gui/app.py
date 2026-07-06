@@ -133,7 +133,7 @@ class OrificeCalculatorApp:
         # ウィンドウ位置・サイズを _build_ui 完了後に復元（after_idle で確実に適用）
         # 環境変化（モニター解像度変更・デュアルモニター解除等）で画面外に
         # なっていた場合は _clamp_geometry_to_screen が現在の画面内に補正する。
-        geom = self._prev_settings.get("geometry", "900x980")
+        geom = self._prev_settings.get("geometry", "1110x980")
         self.root.after_idle(lambda: self.root.geometry(
             self._clamp_geometry_to_screen(geom)
         ))
