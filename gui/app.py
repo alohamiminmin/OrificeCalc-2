@@ -893,10 +893,25 @@ class OrificeCalculatorApp:
                 pass
             tree.tag_configure("ok", foreground="black")
             tree.tag_configure("ng", foreground="red")
+            # 規格の切れ目を示す区切り行（ISO⇔JIS⇔ASME間の横罫線代わり）
+            tree.tag_configure(
+                "separator",
+                background="#4a4a4a",
+                foreground="#4a4a4a",
+            )
 
-            # データ挿入
+            # データ挿入（「規格」列の値が変わる直前に区切り行を1行挿入する）
+            n_cols = len(COLUMN_ORDER)
+            sep_values = ["─" * 6] * n_cols
+            prev_label = None
+
             for row in df_display.itertuples(index=False):
                 values = ["-" if pd.isnull(x) else x for x in row]
+
+                current_label = values[0]  # 「規格」列（COLUMN_ORDER先頭）
+                if prev_label is not None and current_label != prev_label:
+                    tree.insert("", "end", values=sep_values, tags=("separator",))
+                prev_label = current_label
 
                 # 「適合」列 (index 1) が "×" なら ng
                 tag = "ng" if str(values[1]) == "×" else "ok"
