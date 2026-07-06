@@ -11,7 +11,7 @@ from tkinter import ttk, messagebox, filedialog
 import pandas as pd
 
 from core.calculator import calculate_10steps_iso5167
-from core.constants import SGP_DIAMETERS, Z_MODEL_INFO
+from core.constants import SGP_DIAMETERS, SGP_PLATE_THICKNESS, Z_MODEL_INFO
 from core.gas_database import (
     get_available_gases,
     get_component_list,
@@ -623,6 +623,13 @@ class OrificeCalculatorApp:
             self.D_entry.delete(0, tk.END)
             self.D_entry.insert(0, str(D))
             self._on_D_changed()
+
+        # 呼び径に連動してプレート標準板厚を自動設定
+        # （SGP_PLATE_THICKNESSに無い呼び径＝「SGP その他」等では
+        #   現在の板厚入力値をそのまま維持し、上書きしない）
+        t = SGP_PLATE_THICKNESS.get(size)
+        if t is not None and hasattr(self, "plate_t_var"):
+            self.plate_t_var.set(t)
 
     def _on_D_changed(self, event=None):
         try:
