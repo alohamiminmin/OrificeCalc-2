@@ -244,16 +244,63 @@ GAS_DATABASE: Dict[str, Dict[str, Any]] = {
     },
 
     # ===== 日本13A都市ガス (HHV≈45 MJ/Nm³) =====
-    "日本13A都市ガス": {
+    "OG 13A": {
         "is_mixture": True,
         "category":   "都市ガス",
         "composition": {
-            "CH4": 0.896, "C2H6": 0.056, "C3H8": 0.034, "nC4H10": 0.01, "iC4H10": 0.004,
+            "CH4": 0.889, "C2H6": 0.068, "C3H8": 0.031, "nC4H10": 0.0084, "iC4H10": 0.0036,
             "N2":  0.00, "CO2":  0.00,
         },
         "HHV_MJ_Nm3": 45.0,
         "Z_model": "HEOS",
-        "source": "日本ガス協会 (JGA) 代表組成",
+        "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
+    },
+
+    "TG 13A": {
+        "is_mixture": True,
+        "category":   "都市ガス",
+        "composition": {
+            "CH4": 0.896, "C2H6": 0.0562, "C3H8": 0.0343, "nC4H10": 0.00945, "iC4H10": 0.00405,
+            "N2":  0.00, "CO2":  0.00,
+        },
+        "HHV_MJ_Nm3": 45.0,
+        "Z_model": "HEOS",
+        "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
+    },
+
+    "THG 13A": {
+        "is_mixture": True,
+        "category":   "都市ガス",
+        "composition": {
+            "CH4": 0.892, "C2H6": 0.059, "C3H8": 0.041, "nC4H10": 0.0056, "iC4H10": 0.0024,
+            "N2":  0.00, "CO2":  0.00,
+        },
+        "HHV_MJ_Nm3": 45.0,
+        "Z_model": "HEOS",
+        "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
+    },
+
+    "西部ガス 13A": {
+        "is_mixture": True,
+        "category":   "都市ガス",
+        "composition": {
+            "CH4": 0.899, "C2H6": 0.045, "C3H8": 0.027, "nC4H10": 0.0168, "iC4H10": 0.0072,
+            "N2":  0.005, "CO2":  0.00,
+        },
+        "HHV_MJ_Nm3": 45.0,
+        "Z_model": "HEOS",
+        "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
+    },
+
+    "広島ガス 13A": {
+        "is_mixture": True,
+        "category":   "都市ガス",
+        "composition": {
+            "CH4": 0.91, "C2H6": 0.05, "C3H8": 0.02, "nC4H10": 0.014, "iC4H10": 0.006,
+            "N2":  0.00, "CO2":  0.00,
+        },
+        "HHV_MJ_Nm3": 45.0,
+        "Z_model": "HEOS",
         "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
     },
 
