@@ -71,6 +71,7 @@ _CP_NAMES: Dict[str, str] = {
     "Ar":      "Argon",
     "H2O":     "Water",
     "DME":     "DimethylEther",
+    "NH3":     "Ammonia",
 }
 
 

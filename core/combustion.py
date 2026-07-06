@@ -102,21 +102,27 @@ N2_PER_O2     = AIR_N2_FRAC / AIR_O2_FRAC  # ≈ 3.773
 
 # ============================================================
 # 燃焼反応データ（1 mol 燃料あたり）
-# (o2_mol, co2_mol, h2o_mol, so2_mol)
+# (o2_mol, co2_mol, h2o_mol, so2_mol, n2_gen_mol)
+#   n2_gen_mol : 燃焼反応そのものから生成される N2（NH3等の含窒素燃料用）。
+#                炭化水素・CO・H2・H2S・DME は反応生成物として N2 を
+#                生じないため 0。
 # ============================================================
 _COMB: Dict[str, tuple] = {
-    "CH4":    (2.0, 1, 2, 0),
-    "C2H6":   (3.5, 2, 3, 0),
-    "C3H8":   (5.0, 3, 4, 0),
-    "nC4H10": (6.5, 4, 5, 0),
-    "iC4H10": (6.5, 4, 5, 0),
-    "nC5H12": (8.0, 5, 6, 0),
-    "iC5H12": (8.0, 5, 6, 0),
-    "C6H14":  (9.5, 6, 7, 0),
-    "CO":     (0.5, 1, 0, 0),
-    "H2":     (0.5, 0, 1, 0),
-    "H2S":    (1.5, 0, 1, 1),
-    "DME":    (3.0, 2, 3, 0),
+    "CH4":    (2.0, 1, 2, 0, 0),
+    "C2H6":   (3.5, 2, 3, 0, 0),
+    "C3H8":   (5.0, 3, 4, 0, 0),
+    "nC4H10": (6.5, 4, 5, 0, 0),
+    "iC4H10": (6.5, 4, 5, 0, 0),
+    "nC5H12": (8.0, 5, 6, 0, 0),
+    "iC5H12": (8.0, 5, 6, 0, 0),
+    "C6H14":  (9.5, 6, 7, 0, 0),
+    "CO":     (0.5, 1, 0, 0, 0),
+    "H2":     (0.5, 0, 1, 0, 0),
+    "H2S":    (1.5, 0, 1, 1, 0),
+    "DME":    (3.0, 2, 3, 0, 0),
+    # NH3: 4NH3 + 3O2 -> 2N2 + 6H2O （1mol NH3あたり O2=0.75, H2O=1.5, N2=0.5）
+    # CO2・SO2は生成しない
+    "NH3":    (0.75, 0, 1.5, 0, 0.5),
 }
 
 # ============================================================
@@ -135,6 +141,12 @@ _HHV_KJ_MOL: Dict[str, float] = {
     "iC5H12": 3528.83, "C6H14":  4194.95,
     "CO":     282.98,  "H2":     285.83,  "H2S":    562.01,
     "DME":    1460.40,
+    # NH3: NIST標準生成エンタルピー ΔHf°(298.15K,気相) から算出
+    #   NH3(g)=-45.94, H2O(g)=-241.826, H2O(l)=-285.830 kJ/mol (NIST WebBook)
+    #   反応: NH3 + 3/4 O2 -> 1/2 N2 + 3/2 H2O
+    #   HHV = -[(1.5*(-285.830)) - (-45.94)] = 382.81 kJ/mol
+    #   (質量基準 22.48 MJ/kg。文献の代表値 約22.5 MJ/kg と整合)
+    "NH3":    382.81,
 }
 
 # ============================================================
@@ -239,8 +251,8 @@ def _adiabatic_T_analytical(formula: str,
     hhv  = _HHV_KJ_MOL.get(formula)
     if comb is None or hhv is None:
         return None
-    o2, co2, h2o, so2 = comb
-    n2 = lambda_val * o2 * N2_PER_O2
+    o2, co2, h2o, so2, n2_gen = comb
+    n2 = lambda_val * o2 * N2_PER_O2 + n2_gen
     o2e = (lambda_val - 1) * o2
     lhv_kj = hhv - h2o * WATER_HVAP
     n_prod = co2 + h2o + so2 + n2 + o2e
@@ -273,7 +285,7 @@ def calc_single_combustion(formula: str,
         return {"formula": formula, "name": name,
                 "is_combustible": False, "density_kg_m3": rho_r}
 
-    o2, co2, h2o, so2 = comb
+    o2, co2, h2o, so2, n2_gen = comb
 
     # 発熱量
     factor = MOL_PER_NM3 / 1000
@@ -286,7 +298,7 @@ def calc_single_combustion(formula: str,
 
     # 排ガス（λ ≥ 1 完全燃焼）
     o2_excess   = max(lambda_val - 1, 0) * o2
-    n2_total    = lambda_val * o2 * N2_PER_O2
+    n2_total    = lambda_val * o2 * N2_PER_O2 + n2_gen
     exhaust_mol = co2 + h2o + so2 + o2_excess + n2_total
 
     exh_raw = {"CO2": co2, "H2O": h2o, "N2": n2_total}
@@ -351,6 +363,7 @@ def calc_mixture_combustion(composition: Dict[str, float],
     # 1 mol 燃料ガス（混合ガス全体）あたりの O2 要求量・生成物量を集計
     o2_required_total = 0.0   # 可燃成分が完全燃焼するために必要な O2 [mol]
     co2_total = h2o_total = so2_total = 0.0
+    n2_gen_total = 0.0        # 燃焼反応そのものから生成される N2（NH3等）[mol]
 
     # 燃料ガス中にもともと含まれる不燃成分（希釈成分として排ガスへ通過）
     inert_in_fuel: Dict[str, float] = {}
@@ -365,11 +378,12 @@ def calc_mixture_combustion(composition: Dict[str, float],
             t_HHV += frac * r["HHV_MJ_Nm3"]
             t_LHV += frac * r["LHV_MJ_Nm3"]
 
-            o2, co2, h2o, so2 = _COMB[formula]
+            o2, co2, h2o, so2, n2_gen = _COMB[formula]
             o2_required_total += frac * o2
             co2_total += frac * co2
             h2o_total += frac * h2o
             so2_total += frac * so2
+            n2_gen_total += frac * n2_gen
 
         elif formula == "O2":
             # 燃料ガス中の O2 ：自己供給酸化剤
@@ -396,7 +410,7 @@ def calc_mixture_combustion(composition: Dict[str, float],
     e_H2O = h2o_total
     e_SO2 = so2_total
     e_O2  = o2_excess_from_air + o2_fuel_excess
-    e_N2  = n2_from_air + inert_in_fuel.get("N2", 0.0)
+    e_N2  = n2_from_air + inert_in_fuel.get("N2", 0.0) + n2_gen_total
     e_CO2 += inert_in_fuel.get("CO2", 0.0)
     e_H2O += inert_in_fuel.get("H2O", 0.0)
     e_Ar  = inert_in_fuel.get("Ar", 0.0)
@@ -421,7 +435,7 @@ def calc_mixture_combustion(composition: Dict[str, float],
         Tad_mix = _calc_mixture_Tad_analytical(
             comp_norm, lambda_val, T_K,
             o2_required_total, o2_in_fuel, inert_in_fuel,
-            co2_total, h2o_total, so2_total,
+            co2_total, h2o_total, so2_total, n2_gen_total,
         )
 
     # ── 混合ガス密度（0℃, 101.325 kPa 基準）──
@@ -625,11 +639,12 @@ def _calc_mixture_Tad_analytical(comp_norm: Dict[str, float],
                                   inert_in_fuel: Dict[str, float],
                                   co2_total: float,
                                   h2o_total: float,
-                                  so2_total: float) -> Optional[float]:
+                                  so2_total: float,
+                                  n2_gen_total: float = 0.0) -> Optional[float]:
     """
     Cantera が使えない場合の解析近似（gri30 非対応成分を含む混合ガス用）。
     1 mol 燃料ガス全体の燃焼によるエンタルピーバランスから、
-    不燃成分・自己供給 O2 を含めた断熱火炎温度を推定する。
+    不燃成分・自己供給 O2・反応生成 N2（NH3等）を含めた断熱火炎温度を推定する。
     """
     if o2_required_total <= 0:
         return None
@@ -652,7 +667,7 @@ def _calc_mixture_Tad_analytical(comp_norm: Dict[str, float],
     n_h2o = h2o_total + inert_in_fuel.get("H2O", 0.0)
     n_so2 = so2_total
     n_o2  = o2_excess_from_air + o2_fuel_excess
-    n_n2  = n2_from_air + inert_in_fuel.get("N2", 0.0)
+    n_n2  = n2_from_air + inert_in_fuel.get("N2", 0.0) + n2_gen_total
     n_ar  = inert_in_fuel.get("Ar", 0.0)
     n_he  = inert_in_fuel.get("He", 0.0)
 

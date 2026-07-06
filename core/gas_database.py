@@ -160,6 +160,13 @@ COMPONENT_DATABASE: Dict[str, Dict[str, Any]] = {
         "T_ref": 273.15, "mu_ref": 8.595e-6, "mu_coeff": 250.0,
         "rho_ref": 2.0553, "source": "CoolProp 7.2.0",
     },
+    "NH3": {
+        "name": "アンモニア", "name_en": "Ammonia",
+        "M": 17.0305, "kappa": 1.3130, "omega": 0.2557,
+        "Tc": 405.56, "Pc": 11363391,
+        "T_ref": 273.15, "mu_ref": 9.193e-6, "mu_coeff": 476.4,
+        "rho_ref": 0.7598, "source": "CoolProp 8.0.0",
+    },
 }
 
 # ============================================================
@@ -175,6 +182,7 @@ CP_NAME_MAP: Dict[str, str] = {
     "CO":     "CarbonMonoxide","H2":    "Hydrogen",
     "He":     "Helium",       "Ar":     "Argon",
     "H2O":    "Water",        "DME":    "DimethylEther",
+    "NH3":    "Ammonia",
 }
 
 # ============================================================
@@ -217,6 +225,7 @@ GAS_DATABASE: Dict[str, Dict[str, Any]] = {
     "アルゴン":     _single("Ar",   "不活性ガス"),
     "水蒸気":       _single("H2O",  "蒸気"),
     "ジメチルエーテル": _single("DME", "エーテル"),
+    "アンモニア":     _single("NH3",  "燃焼性ガス"),
 
     # ===== 空気（プリセット混合） =====
     "空気": {
