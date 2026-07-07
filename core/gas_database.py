@@ -253,6 +253,7 @@ GAS_DATABASE: Dict[str, Dict[str, Any]] = {
         },
         "HHV_MJ_Nm3": 45.0,
         "Z_model": "HEOS",
+        "source": "OG 13A",
         "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
     },
 
@@ -265,6 +266,7 @@ GAS_DATABASE: Dict[str, Dict[str, Any]] = {
         },
         "HHV_MJ_Nm3": 45.0,
         "Z_model": "HEOS",
+        "source": "TG 13A",
         "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
     },
 
@@ -277,6 +279,7 @@ GAS_DATABASE: Dict[str, Dict[str, Any]] = {
         },
         "HHV_MJ_Nm3": 45.0,
         "Z_model": "HEOS",
+        "source": "THG 13A",
         "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
     },
 
@@ -289,6 +292,7 @@ GAS_DATABASE: Dict[str, Dict[str, Any]] = {
         },
         "HHV_MJ_Nm3": 45.0,
         "Z_model": "HEOS",
+        "source": "西部ガス 13A",
         "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
     },
 
@@ -301,6 +305,7 @@ GAS_DATABASE: Dict[str, Dict[str, Any]] = {
         },
         "HHV_MJ_Nm3": 45.0,
         "Z_model": "HEOS",
+        "source": "広島ガス 13A",
         "description": "都市ガス 13A (HHV≈45 MJ/Nm³)",
     },
 
