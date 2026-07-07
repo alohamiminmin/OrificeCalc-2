@@ -1009,8 +1009,8 @@ class OrificeCalculatorApp:
         elif mode == "ASME_MFC14M":
             if not (0.1 <= beta <= 0.75):
                 notes.append("β が ASME の適用範囲外 (0.1〜0.75)")
-            if not (12 <= D <= 40):
-                notes.append("D が ASME MFC-14M-2003 の適用範囲外 (12〜40mm)")
+            if not (12 <= D <= 45):
+                notes.append("D が ASME MFC-14M-2003 の適用範囲外 (呼び径12〜40mm,1/2in〜1 1/2in)")
             if Re is None or pd.isnull(Re) or Re < 5000:
                 notes.append("Re < 5000 (ASME 下限)")
 
