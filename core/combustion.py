@@ -17,6 +17,7 @@ import math
 import os
 import shutil
 import tempfile
+import time
 from typing import Dict, Optional
 
 
@@ -792,15 +793,24 @@ def calc_mixture_burning_velocity_detailed(
         lambda_val: float = 1.0,
         T_K: float = 298.15,
         P_Pa: float = 101325.0,
-        progress_callback: Optional[callable] = None) -> Dict[str, object]:
+        progress_callback: Optional[callable] = None,
+        max_time_sec: float = 1200.0) -> Dict[str, object]:
     """
     AramcoMech3.0（581化学種・3037反応式）を使った詳細機構による
     層流燃焼速度計算。nC4H10・iC4H10・DME を含む混合ガスに対応する。
 
-    計算コストが非常に大きく（581化学種のため 1 次元火炎構造の数値求解が
-    重く、実測で数分〜収束しないケースあり）、GUI からは必ずバック
-    グラウンドスレッドで呼び出し、進捗を progress_callback で
-    ユーザーに伝えること。
+    計算コストが非常に大きい（581化学種のため 1 次元火炎構造の数値求解が
+    重く、実測で Newton 法が収束せず時間刻み法に繰り返しフォールバック
+    するケースがあり、最初のステップだけで数分かかることもある）。
+
+    solve(auto=True) による一括計算ではなく、グリッド細分化を
+    1 ステップずつ手動で回し（solve → refine → solve → ...）、
+    各ステップ完了ごとに、その時点の暫定燃焼速度を
+    「参考値・収束途中で不正確な可能性あり」と明記した上で
+    progress_callback に報告する。最終ステップ（refine が新規点を
+    追加しなくなった時点）の値のみを「収束値」として返す。
+
+    GUI からは必ずバックグラウンドスレッドで呼び出すこと。
 
     Parameters
     ----------
@@ -808,11 +818,13 @@ def calc_mixture_burning_velocity_detailed(
     lambda_val         : 空気過剰率 λ
     T_K, P_Pa          : 初期温度・圧力
     progress_callback  : callable(str) - 進捗メッセージを受け取る任意のコールバック
+    max_time_sec       : 計算全体の時間上限[秒]。超過したら中断し、
+                         その時点の最良推定値を「未収束の参考値」として返す
 
     Returns
     -------
     {"ok": bool, "Sl_cm_s": float | None, "reason": str | None,
-     "mechanism": str}
+     "mechanism": str, "converged": bool}
     """
     def _report(msg: str):
         if progress_callback:
@@ -858,25 +870,65 @@ def calc_mixture_burning_velocity_detailed(
 
         gas.TPX = T_K, P_Pa, mix_str
 
-        _report("1次元火炎構造を計算中...（数分かかる場合があります）")
         flame = ct.FreeFlame(gas, width=0.03)
         flame.set_refine_criteria(ratio=3, slope=0.06, curve=0.12)
-        flame.solve(loglevel=0, auto=True)
+
+        t_start = time.time()
+
+        def _provisional_report(step_label: str):
+            elapsed = time.time() - t_start
+            try:
+                sl_now = flame.velocity[0] * 100
+                n_pts = flame.flame.n_points
+                _report(
+                    f"[参考値・収束途中／不正確な可能性あり] "
+                    f"Sl ≈ {sl_now:.2f} cm/s　"
+                    f"(grid点数={n_pts}, 経過{elapsed:.0f}秒) — {step_label}"
+                )
+            except Exception:
+                _report(f"{step_label}（経過{elapsed:.0f}秒、暫定値取得不可）")
+
+        _report("AramcoMech3.0を初期グリッドで計算中...（Newton法が収束しにくい"
+                "場合、この最初のステップだけで数分かかることがあります）")
+        flame.solve(loglevel=0, refine_grid=False)
+        _provisional_report("初期グリッド計算完了")
+
+        converged = False
+        max_steps = 15
+        for step in range(max_steps):
+            if time.time() - t_start > max_time_sec:
+                sl_now = flame.velocity[0] * 100
+                return {
+                    "ok": True, "Sl_cm_s": round(sl_now, 2),
+                    "reason": f"計算時間が{max_time_sec:.0f}秒を超えたため中断"
+                              "しました。以下は未収束の参考値です。",
+                    "mechanism": "AramcoMech3.0.yaml", "converged": False,
+                }
+
+            n_new = flame.refine(loglevel=0)
+            flame.solve(loglevel=0, refine_grid=False)
+            _provisional_report(f"グリッド細分化 {step + 1} 回目完了")
+
+            if n_new == 0:
+                converged = True
+                break
 
         Sl_m_s = flame.velocity[0]
         if Sl_m_s is None or Sl_m_s <= 0:
             return {"ok": False, "Sl_cm_s": None,
                     "reason": "燃焼速度の解が収束しませんでした",
-                    "mechanism": "AramcoMech3.0.yaml"}
+                    "mechanism": "AramcoMech3.0.yaml", "converged": False}
 
-        _report("計算完了")
+        _report("計算完了" if converged else "最大ステップ数に到達（未収束の可能性）")
         return {"ok": True, "Sl_cm_s": round(float(Sl_m_s) * 100, 2),
-                "reason": None, "mechanism": "AramcoMech3.0.yaml"}
+                "reason": None if converged else
+                "最大ステップ数に達しました。収束していない可能性があります。",
+                "mechanism": "AramcoMech3.0.yaml", "converged": converged}
 
     except Exception as e:
         return {"ok": False, "Sl_cm_s": None,
                 "reason": f"計算中にエラーが発生しました: {e}",
-                "mechanism": "AramcoMech3.0.yaml"}
+                "mechanism": "AramcoMech3.0.yaml", "converged": False}
 
 
 def _calc_mixture_Tad_analytical(comp_norm: Dict[str, float],

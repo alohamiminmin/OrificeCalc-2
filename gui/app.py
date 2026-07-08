@@ -1211,7 +1211,7 @@ class OrificeCalculatorApp:
         ttk.Label(result_frame, text="■ トータル",
                   font=("", 9, "bold")).pack(anchor="w", pady=(8,0))
         total_lbl = ttk.Label(result_frame, text="", justify="left",
-                              font=("Consolas", 9))
+                              font=("MS Gothic", 9))
         total_lbl.pack(anchor="w", padx=16)
 
         # ── 混合ガス全体の層流燃焼速度（重い計算のため明示ボタン操作） ──
@@ -1219,7 +1219,7 @@ class OrificeCalculatorApp:
         sl_frame.pack(fill="x", padx=0, pady=(8, 4))
 
         sl_result_lbl = ttk.Label(
-            sl_frame, justify="left", font=("Consolas", 9),
+            sl_frame, justify="left", font=("MS Gothic", 9),
             text="  未計算（左の「設定条件の空気比λで計算」ボタンを押してください）"
         )
         sl_result_lbl.pack(anchor="w", padx=8, pady=(2, 4))
@@ -1271,9 +1271,10 @@ class OrificeCalculatorApp:
         # nC4H10・iC4H10・DME を含む場合、標準の高速パスでは計算できない
         # ため、581化学種の詳細機構で計算する。数分〜十数分かかる。
         sl_detail_result_lbl = ttk.Label(
-            sl_frame, justify="left", font=("Consolas", 9),
+            sl_frame, justify="left", font=("MS Gothic", 9),
             foreground="darkblue",
-            text="  （nC4H10・iC4H10・DME はこちらの詳細機構計算で対応）"
+            text="  （nC4H10・iC4H10・DME はこちらの詳細機構計算で対応。"
+                 "最初の途中経過が出るまで数分かかる場合があります）"
         )
         sl_detail_result_lbl.pack(anchor="w", padx=8, pady=(2, 4))
 
@@ -1290,7 +1291,10 @@ class OrificeCalculatorApp:
 
             def on_progress(msg: str):
                 def update_label():
-                    sl_detail_result_lbl.config(foreground="darkblue", text=f"  {msg}")
+                    # 「参考値」を含む暫定報告はオレンジで区別し、
+                    # 未収束の途中経過であることを視覚的にも伝える
+                    color = "darkorange" if "参考値" in msg else "darkblue"
+                    sl_detail_result_lbl.config(foreground=color, text=f"  {msg}")
                 win.after(0, update_label)
 
             def worker():
@@ -1301,13 +1305,20 @@ class OrificeCalculatorApp:
 
                 def apply_result():
                     sl_detail_btn.config(state="normal")
-                    if res["ok"]:
+                    if res["ok"] and res.get("converged", True):
                         win._last_sl_cm_s_detailed = res["Sl_cm_s"]
                         sl_detail_result_lbl.config(foreground="darkgreen", text=(
-                            f"  層流燃焼速度（AramcoMech3.0詳細機構） Sl = "
+                            f"  層流燃焼速度（AramcoMech3.0詳細機構・収束済） Sl = "
                             f"{res['Sl_cm_s']:.2f} cm/s"
                             f"　（条件: T={T_var.get():.1f}℃, "
                             f"P={P_var.get():.3f} kPa(abs), λ={lam:.2f}）"
+                        ))
+                    elif res["ok"] and not res.get("converged", True):
+                        # 時間切れ等で打ち切られたが暫定値は得られたケース
+                        win._last_sl_cm_s_detailed = None
+                        sl_detail_result_lbl.config(foreground="darkorange", text=(
+                            f"  ⚠ 未収束の参考値　Sl ≈ {res['Sl_cm_s']:.2f} cm/s"
+                            f"　{res.get('reason', '')}"
                         ))
                     else:
                         win._last_sl_cm_s_detailed = None
@@ -1323,7 +1334,7 @@ class OrificeCalculatorApp:
         sl_detail_btn = ttk.Button(
             sl_frame,
             text="⚠⚠ 詳細機構(AramcoMech3.0)で計算 "
-                 "— nC4H10/iC4H10/DME対応・数分〜十数分かかります",
+                 "— nC4H10/iC4H10/DME対応・最初の途中経過まで数分、収束まで最大20分",
             command=_run_burning_velocity_detailed,
         )
         sl_detail_btn.pack(anchor="w", padx=8, pady=(0, 6))
