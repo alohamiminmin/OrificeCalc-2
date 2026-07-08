@@ -90,6 +90,48 @@ def _get_gri30_path() -> str:
     _GRI30_SAFE_PATH = "gri30.yaml"
     return _GRI30_SAFE_PATH
 
+
+# ============================================================
+# アプリ同梱の拡張反応機構（core/mechanisms/）パス解決
+#
+# gri30.yaml では計算できない燃料（C4+炭化水素・DME・NH3等）用に、
+# core/mechanisms/ 配下へ同梱した詳細反応機構ファイルを解決する。
+# 日本語ユーザー名パス問題への対策は _get_gri30_path と同様。
+# ============================================================
+_MECH_SAFE_PATHS: Dict[str, str] = {}
+
+
+def _get_mechanism_path(filename: str) -> Optional[str]:
+    """
+    core/mechanisms/<filename> への安全な（ASCII のみの）パスを返す。
+    ファイルが存在しない場合は None。
+    """
+    if filename in _MECH_SAFE_PATHS:
+        cached = _MECH_SAFE_PATHS[filename]
+        if os.path.isfile(cached):
+            return cached
+
+    # core/mechanisms/ ディレクトリを探す（このファイルの1つ上の階層）
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    mech_dir = os.path.join(this_dir, "mechanisms")
+    candidate = os.path.join(mech_dir, filename)
+
+    if not os.path.isfile(candidate):
+        return None
+
+    if candidate.isascii():
+        _MECH_SAFE_PATHS[filename] = candidate
+        return candidate
+
+    # 非 ASCII パス → ASCII な一時ディレクトリにコピー
+    tmp_dir = os.path.join(tempfile.gettempdir(), "cantera_ascii_mechanisms")
+    os.makedirs(tmp_dir, exist_ok=True)
+    dest = os.path.join(tmp_dir, filename)
+    if not os.path.isfile(dest):
+        shutil.copy2(candidate, dest)
+    _MECH_SAFE_PATHS[filename] = dest
+    return dest
+
 # ============================================================
 # 定数
 # ============================================================
@@ -159,6 +201,34 @@ _CT_FUEL: Dict[str, str] = {
 _OXIDIZER = "O2:0.2095, N2:0.7905, AR:0.0093"
 
 # ============================================================
+# 拡張反応機構（core/mechanisms/ 同梱）の対応化学種マッピング
+#   詳細は core/mechanisms/README.md 参照
+# ============================================================
+
+# AramcoMech3.0: C0-C4炭化水素 + DME。断熱火炎温度は高速（gri30と同等）。
+# 層流燃焼速度は理論上可能だが581化学種の詳細機構のため計算コストが
+# 非常に大きく（実測で4分以上収束しない場合あり）、GUIでは明示的な
+# 「詳細機構計算」操作でのみ呼び出す。
+_CT_FUEL_ARAMCO: Dict[str, str] = {
+    "nC4H10": "C4H10", "iC4H10": "IC4H10", "DME": "CH3OCH3",
+}
+_MECH_ARAMCO = "AramcoMech3.0.yaml"
+
+# n-hexane-NUIG-2015: ペンタン・ヘキサン系。輸送物性データが無いため
+# 断熱火炎温度のみ対応（層流燃焼速度は計算不可）。
+_CT_FUEL_HEXMECH: Dict[str, str] = {
+    "nC5H12": "NC5H12", "iC5H12": "IC5H12", "C6H14": "NC6H14",
+}
+_MECH_HEXMECH = "n-hexane-NUIG-2015.yaml"
+
+# ammonia-CO-H2-Alzueta-2023: NH3系。断熱火炎温度・層流燃焼速度とも
+# 高速に対応可能（42化学種と小規模なため）。
+_CT_FUEL_NH3: Dict[str, str] = {
+    "NH3": "NH3",
+}
+_MECH_NH3 = "ammonia-CO-H2-Alzueta-2023.yaml"
+
+# ============================================================
 # 単独成分の最大層流燃焼速度（文献値, 298 K・1 atm・空気中）
 #   sl_max_cm_s : 最大層流燃焼速度 [cm/s]
 #   phi_at_max  : 最大値が現れる当量比 φ（炭化水素系は φ≈1.05〜1.1付近、
@@ -226,10 +296,15 @@ def get_component_density(formula: str, T_K: float,
 def _adiabatic_T_cantera(formula_ct: str,
                          lambda_val: float = 1.0,
                          T_K: float = 298.15,
-                         P_Pa: float = 101325.0) -> Optional[float]:
+                         P_Pa: float = 101325.0,
+                         mechanism_path: Optional[str] = None) -> Optional[float]:
+    """
+    断熱火炎温度を Cantera で計算する。
+    mechanism_path を省略した場合は gri30.yaml を使用（既存動作）。
+    """
     try:
         import cantera as ct
-        gas = ct.Solution(_get_gri30_path())
+        gas = ct.Solution(mechanism_path or _get_gri30_path())
         phi = 1.0 / max(lambda_val, 0.01)   # φ = 1/λ
         gas.set_equivalence_ratio(phi, fuel=formula_ct, oxidizer=_OXIDIZER)
         gas.TP = T_K, P_Pa
@@ -307,10 +382,30 @@ def calc_single_combustion(formula: str,
     exh_pct = {k: round(v / exhaust_mol * 100, 2) for k, v in exh_raw.items() if v > 0}
 
     # 断熱火炎温度（初期温度 T_K・初期圧力 P_Pa を反映）
-    ct_name = _CT_FUEL.get(formula)
-    Tad     = (_adiabatic_T_cantera(ct_name, lambda_val, T_K, P_Pa) if ct_name
-               else _adiabatic_T_analytical(formula, lambda_val, T_K, P_Pa))
-    Tad_C   = round(Tad - 273.15, 0) if Tad else None
+    # 優先順位: gri30(標準) → AramcoMech3.0(C4+DME) → NUIG-2015(C5/C6)
+    #           → Alzueta(NH3) → 解析近似（いずれも非対応の場合）
+    Tad = None
+    if formula in _CT_FUEL:
+        Tad = _adiabatic_T_cantera(_CT_FUEL[formula], lambda_val, T_K, P_Pa)
+    elif formula in _CT_FUEL_ARAMCO:
+        mech = _get_mechanism_path(_MECH_ARAMCO)
+        if mech:
+            Tad = _adiabatic_T_cantera(_CT_FUEL_ARAMCO[formula], lambda_val,
+                                        T_K, P_Pa, mechanism_path=mech)
+    elif formula in _CT_FUEL_HEXMECH:
+        mech = _get_mechanism_path(_MECH_HEXMECH)
+        if mech:
+            Tad = _adiabatic_T_cantera(_CT_FUEL_HEXMECH[formula], lambda_val,
+                                        T_K, P_Pa, mechanism_path=mech)
+    elif formula in _CT_FUEL_NH3:
+        mech = _get_mechanism_path(_MECH_NH3)
+        if mech:
+            Tad = _adiabatic_T_cantera(_CT_FUEL_NH3[formula], lambda_val,
+                                        T_K, P_Pa, mechanism_path=mech)
+
+    if Tad is None:
+        Tad = _adiabatic_T_analytical(formula, lambda_val, T_K, P_Pa)
+    Tad_C = round(Tad - 273.15, 0) if Tad else None
 
     return {
         "formula":             formula,
@@ -481,30 +576,33 @@ def calc_mixture_combustion(composition: Dict[str, float],
     }
 
 
-def _build_gri30_mixture_with_air(gas, comp_norm: Dict[str, float],
-                                   lambda_val: float) -> Optional[str]:
+def _build_mixture_with_air(gas, comp_norm: Dict[str, float],
+                             lambda_val: float,
+                             fuel_map: Dict[str, str]) -> Optional[str]:
     """
     混合ガス全体（可燃成分 + 不燃成分 + 燃料中の O2）と、外部から追加する
     空気（理論空気量×λ から燃料中の O2 を差し引いた量）を混合した
     Cantera 用組成文字列を返す。
 
-    gas は事前に gri30.yaml で構築済みの ct.Solution を渡す
+    gas は事前に対象機構で構築済みの ct.Solution を渡す
     （種名リストの参照のみに使用、状態は変更しない）。
+    fuel_map は「アプリ内の化学式キー → その機構内での化学種名」の
+    マッピング（例: gri30なら _CT_FUEL、AramcoMech3.0なら _CT_FUEL_ARAMCO）。
 
-    gri30.yaml に存在しない成分（Ar, He, nC4H10 以上の重質炭化水素, DME 等）
-    が含まれる場合、または可燃成分が存在しない場合は None を返す。
+    fuel_map に無い可燃成分が含まれる場合、または可燃成分が
+    存在しない場合は None を返す。
     """
     species_names = set(gas.species_names)
 
-    # gri30 で扱えない成分が含まれている場合は計算不可
+    # この機構で扱えない成分が含まれている場合は計算不可
     for formula, frac in comp_norm.items():
         if frac <= 0:
             continue
-        if formula in _CT_FUEL or formula in ("N2", "O2"):
+        if formula in fuel_map or formula in ("N2", "O2"):
             continue
         if formula in ("CO2", "H2O") and formula in species_names:
             continue
-        # Ar・He・DME・C4 以上の炭化水素などは gri30 非対応
+        # 非対応の希釈成分・他機構専用の可燃成分などは非対応
         return None
 
     # 必要な O2（可燃成分の完全燃焼に必要な量）
@@ -519,7 +617,17 @@ def _build_gri30_mixture_with_air(gas, comp_norm: Dict[str, float],
     air_actual = lambda_val * air_stoich
 
     # 燃料ストリーム（1 mol 燃料ガス全体）+ 外部から追加する空気のみを混合
-    fuel_parts = {f: frac for f, frac in comp_norm.items() if frac > 0}
+    # fuel_map を使ってアプリ内部の化学式キー（例: "nC4H10"）を
+    # 対象機構内での実際の化学種名（例: "C4H10"）に変換する。
+    # gri30 用の _CT_FUEL はキーと値が一致するため、この変換は
+    # 既存の gri30 経路の動作に影響しない。
+    fuel_parts: Dict[str, float] = {}
+    for f, frac in comp_norm.items():
+        if frac <= 0:
+            continue
+        ct_name = fuel_map.get(f, f)   # fuel_map に無ければそのまま(N2/O2/CO2/H2O等)
+        fuel_parts[ct_name] = fuel_parts.get(ct_name, 0.0) + frac
+
     air_moles = {"O2": air_actual * AIR_O2_FRAC,
                  "N2": air_actual * AIR_N2_FRAC,
                  "AR": air_actual * 0.0093}
@@ -530,6 +638,12 @@ def _build_gri30_mixture_with_air(gas, comp_norm: Dict[str, float],
     return ", ".join(f"{k}:{v}" for k, v in mix.items() if v > 0)
 
 
+# 旧名を維持（gri30専用の後方互換ラッパー）
+def _build_gri30_mixture_with_air(gas, comp_norm: Dict[str, float],
+                                   lambda_val: float) -> Optional[str]:
+    return _build_mixture_with_air(gas, comp_norm, lambda_val, _CT_FUEL)
+
+
 def _calc_mixture_Tad_cantera(comp_norm: Dict[str, float],
                                lambda_val: float = 1.0,
                                T_K: float = 298.15,
@@ -538,20 +652,47 @@ def _calc_mixture_Tad_cantera(comp_norm: Dict[str, float],
     混合ガス全体（可燃成分 + 不燃成分 + 燃料中の O2）を 1 つの "燃料ストリーム"
     として扱い、外部から追加する空気（理論空気量×λ から燃料中の O2 を
     差し引いた量）と混合して断熱火炎温度を解く。
-    gri30.yaml に存在しない成分（Ar, He, nC4H10 以上の重質炭化水素, DME 等）は
-    その都度無視され、呼び出し元の解析近似フォールバックに委ねる。
+
+    以下の優先順位で対応可能な機構を順に試す:
+      1. gri30.yaml       （CH4, C2H6, C3H8, CO, H2）
+      2. AramcoMech3.0     （+ nC4H10, iC4H10, DME）
+      3. n-hexane-NUIG-2015（+ nC5H12, iC5H12, C6H14。ただし機構内では
+                              gri30系のCH4等もカバーされるため単独でも可）
+      4. ammonia-CO-H2-Alzueta-2023（NH3 + CO, H2）
+
+    混合ガス中の可燃成分が、いずれか1つの機構ですべてカバーできる
+    場合のみ Cantera 計算を実行する。異なる機構が必要な成分が混在する
+    場合（例: CH4 + NH3）は None を返し、呼び出し元の解析近似に委ねる。
     """
     try:
         import cantera as ct
-        gas = ct.Solution(_get_gri30_path())
-        mix_str = _build_gri30_mixture_with_air(gas, comp_norm, lambda_val)
-        if mix_str is None:
-            return None
-        gas.TPX = T_K, P_Pa, mix_str
-        gas.equilibrate("HP")
-        return round(gas.T - 273.15, 0)
     except Exception:
         return None
+
+    candidates = [(_get_gri30_path(), _CT_FUEL)]
+    aramco_path = _get_mechanism_path(_MECH_ARAMCO)
+    if aramco_path:
+        candidates.append((aramco_path, {**_CT_FUEL, **_CT_FUEL_ARAMCO}))
+    hexmech_path = _get_mechanism_path(_MECH_HEXMECH)
+    if hexmech_path:
+        candidates.append((hexmech_path, {**_CT_FUEL, **_CT_FUEL_ARAMCO, **_CT_FUEL_HEXMECH}))
+    nh3_path = _get_mechanism_path(_MECH_NH3)
+    if nh3_path:
+        candidates.append((nh3_path, _CT_FUEL_NH3))
+
+    for mech_path, fuel_map in candidates:
+        try:
+            gas = ct.Solution(mech_path)
+            mix_str = _build_mixture_with_air(gas, comp_norm, lambda_val, fuel_map)
+            if mix_str is None:
+                continue
+            gas.TPX = T_K, P_Pa, mix_str
+            gas.equilibrate("HP")
+            return round(gas.T - 273.15, 0)
+        except Exception:
+            continue
+
+    return None
 
 
 def calc_mixture_burning_velocity(composition: Dict[str, float],
@@ -594,18 +735,32 @@ def calc_mixture_burning_velocity(composition: Dict[str, float],
 
     try:
         gas = ct.Solution(_get_gri30_path())
-        mix_str = _build_gri30_mixture_with_air(gas, comp_norm, lambda_val)
+        mix_str = _build_mixture_with_air(gas, comp_norm, lambda_val, _CT_FUEL)
+        used_mechanism = "gri30.yaml"
+
+        # gri30 非対応の場合、NH3 Alzueta 機構（NH3・CO・H2系、高速）を試す
+        if mix_str is None:
+            nh3_path = _get_mechanism_path(_MECH_NH3)
+            if nh3_path:
+                gas_nh3 = ct.Solution(nh3_path)
+                mix_str_nh3 = _build_mixture_with_air(gas_nh3, comp_norm, lambda_val, _CT_FUEL_NH3)
+                if mix_str_nh3 is not None:
+                    gas = gas_nh3
+                    mix_str = mix_str_nh3
+                    used_mechanism = "ammonia-CO-H2-Alzueta-2023.yaml"
+
         if mix_str is None:
             unsupported = sorted(
                 f for f, frac in comp_norm.items()
-                if frac > 0 and f not in _CT_FUEL
+                if frac > 0 and f not in _CT_FUEL and f not in _CT_FUEL_NH3
                 and f not in ("N2", "O2", "CO2", "H2O")
             )
             if unsupported:
-                reason = ("層流燃焼速度の計算に対応していない成分が含まれて"
+                reason = ("層流燃焼速度の高速計算に対応していない成分が含まれて"
                           f"います: {', '.join(unsupported)}"
-                          "（対応成分: CH4, C2H6, C3H8, H2, CO とその希釈成分"
-                          "[N2, CO2, O2, H2O] のみ）")
+                          "（高速対応: CH4, C2H6, C3H8, H2, CO, NH3 とその希釈成分"
+                          "[N2, CO2, O2, H2O] のみ。nC4H10・iC4H10・DME は"
+                          "「詳細機構で計算」ボタンから別途計算できます）")
             else:
                 reason = "可燃性成分が含まれていないため計算できません"
             return {"ok": False, "Sl_cm_s": None, "reason": reason}
@@ -624,11 +779,104 @@ def calc_mixture_burning_velocity(composition: Dict[str, float],
                     "reason": "燃焼速度の解が収束しませんでした"
                     "（極端に薄い・濃い組成の可能性があります）"}
 
-        return {"ok": True, "Sl_cm_s": round(float(Sl_m_s) * 100, 2), "reason": None}
+        return {"ok": True, "Sl_cm_s": round(float(Sl_m_s) * 100, 2),
+                "reason": None, "mechanism": used_mechanism}
 
     except Exception as e:
         return {"ok": False, "Sl_cm_s": None,
                 "reason": f"計算中にエラーが発生しました: {e}"}
+
+
+def calc_mixture_burning_velocity_detailed(
+        composition: Dict[str, float],
+        lambda_val: float = 1.0,
+        T_K: float = 298.15,
+        P_Pa: float = 101325.0,
+        progress_callback: Optional[callable] = None) -> Dict[str, object]:
+    """
+    AramcoMech3.0（581化学種・3037反応式）を使った詳細機構による
+    層流燃焼速度計算。nC4H10・iC4H10・DME を含む混合ガスに対応する。
+
+    計算コストが非常に大きく（581化学種のため 1 次元火炎構造の数値求解が
+    重く、実測で数分〜収束しないケースあり）、GUI からは必ずバック
+    グラウンドスレッドで呼び出し、進捗を progress_callback で
+    ユーザーに伝えること。
+
+    Parameters
+    ----------
+    composition       : {formula: mol_fraction}
+    lambda_val         : 空気過剰率 λ
+    T_K, P_Pa          : 初期温度・圧力
+    progress_callback  : callable(str) - 進捗メッセージを受け取る任意のコールバック
+
+    Returns
+    -------
+    {"ok": bool, "Sl_cm_s": float | None, "reason": str | None,
+     "mechanism": str}
+    """
+    def _report(msg: str):
+        if progress_callback:
+            try:
+                progress_callback(msg)
+            except Exception:
+                pass
+
+    total = sum(composition.values())
+    if total <= 0:
+        return {"ok": False, "Sl_cm_s": None, "reason": "組成が空です"}
+    comp_norm = {k: v / total for k, v in composition.items()}
+
+    try:
+        import cantera as ct
+    except Exception:
+        return {"ok": False, "Sl_cm_s": None,
+                "reason": "Cantera が利用できません"}
+
+    aramco_path = _get_mechanism_path(_MECH_ARAMCO)
+    if aramco_path is None:
+        return {"ok": False, "Sl_cm_s": None,
+                "reason": "AramcoMech3.0.yaml が見つかりません"
+                "（core/mechanisms/ に配置されているか確認してください）"}
+
+    try:
+        _report("AramcoMech3.0（581化学種）を読み込み中...")
+        fuel_map = {**_CT_FUEL, **_CT_FUEL_ARAMCO}
+        gas = ct.Solution(aramco_path)
+        mix_str = _build_mixture_with_air(gas, comp_norm, lambda_val, fuel_map)
+
+        if mix_str is None:
+            unsupported = sorted(
+                f for f, frac in comp_norm.items()
+                if frac > 0 and f not in fuel_map
+                and f not in ("N2", "O2", "CO2", "H2O")
+            )
+            reason = ("AramcoMech3.0 でも対応していない成分が含まれています: "
+                      f"{', '.join(unsupported)}"
+                      "（対応: CH4, C2H6, C3H8, nC4H10, iC4H10, DME, H2, CO）"
+                      if unsupported else "可燃性成分が含まれていません")
+            return {"ok": False, "Sl_cm_s": None, "reason": reason}
+
+        gas.TPX = T_K, P_Pa, mix_str
+
+        _report("1次元火炎構造を計算中...（数分かかる場合があります）")
+        flame = ct.FreeFlame(gas, width=0.03)
+        flame.set_refine_criteria(ratio=3, slope=0.06, curve=0.12)
+        flame.solve(loglevel=0, auto=True)
+
+        Sl_m_s = flame.velocity[0]
+        if Sl_m_s is None or Sl_m_s <= 0:
+            return {"ok": False, "Sl_cm_s": None,
+                    "reason": "燃焼速度の解が収束しませんでした",
+                    "mechanism": "AramcoMech3.0.yaml"}
+
+        _report("計算完了")
+        return {"ok": True, "Sl_cm_s": round(float(Sl_m_s) * 100, 2),
+                "reason": None, "mechanism": "AramcoMech3.0.yaml"}
+
+    except Exception as e:
+        return {"ok": False, "Sl_cm_s": None,
+                "reason": f"計算中にエラーが発生しました: {e}",
+                "mechanism": "AramcoMech3.0.yaml"}
 
 
 def _calc_mixture_Tad_analytical(comp_norm: Dict[str, float],

@@ -86,6 +86,60 @@ def _export_combustion_to_excel(result, gas_name, composition, mixture_sl_cm_s=N
         mb.showerror("エラー", str(e))
 
 
+def _enable_treeview_copy(tree: "ttk.Treeview") -> None:
+    """
+    Treeview にコピー機能（右クリックメニュー + Ctrl+C）を付与する。
+    タブ区切りテキスト（ヘッダー行を含む）としてクリップボードへコピーする
+    ため、Excel等へそのまま貼り付けられる。
+
+    - 選択行がある場合: 選択行のみコピー
+    - 選択行が無い場合: 表示中の全行をコピー
+    """
+    def _rows_to_tsv(item_ids) -> str:
+        cols = tree["columns"]
+        headers = [tree.heading(c, option="text") or str(c) for c in cols]
+        lines = ["\t".join(headers)]
+        for item_id in item_ids:
+            values = tree.item(item_id, "values")
+            lines.append("\t".join(str(v) for v in values))
+        return "\n".join(lines)
+
+    def _copy_to_clipboard(text: str):
+        widget = tree.winfo_toplevel()
+        widget.clipboard_clear()
+        widget.clipboard_append(text)
+
+    def copy_selected(event=None):
+        selected = tree.selection()
+        item_ids = selected if selected else tree.get_children()
+        if not item_ids:
+            return
+        _copy_to_clipboard(_rows_to_tsv(item_ids))
+
+    def copy_all(event=None):
+        item_ids = tree.get_children()
+        if not item_ids:
+            return
+        _copy_to_clipboard(_rows_to_tsv(item_ids))
+
+    # 右クリックメニュー
+    menu = tk.Menu(tree, tearoff=0)
+    menu.add_command(label="選択行をコピー（無選択時は全行）", command=copy_selected)
+    menu.add_command(label="全行をコピー", command=copy_all)
+
+    def show_menu(event):
+        # 右クリックした行を選択状態にしてからメニューを出す
+        row_id = tree.identify_row(event.y)
+        if row_id and row_id not in tree.selection():
+            tree.selection_set(row_id)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    tree.bind("<Button-3>", show_menu)       # Windows/Linux 右クリック
+    tree.bind("<Button-2>", show_menu)       # 一部環境（中クリック相当）
+    tree.bind("<Control-c>", copy_selected)
+    tree.bind("<Control-C>", copy_selected)
+
+
 def _get_settings_path() -> str:
     """設定ファイル(orifice_settings.json)のパスを返す"""
     import os, sys
@@ -877,6 +931,7 @@ class OrificeCalculatorApp:
             tree_container.grid_rowconfigure(0, weight=1)
 
             tree.configure(yscroll=vsb.set, xscroll=hsb.set)
+            _enable_treeview_copy(tree)
 
             # 列幅の強制固定 (すべての列を50に)
             for c in COLUMN_ORDER:
@@ -1041,6 +1096,7 @@ class OrificeCalculatorApp:
                 calc_mixture_combustion,
                 get_literature_burning_velocity,
                 calc_mixture_burning_velocity,
+                calc_mixture_burning_velocity_detailed,
             )
             from core.gas_database import COMPONENT_DATABASE
         except ImportError as e:
@@ -1149,6 +1205,7 @@ class OrificeCalculatorApp:
         tree.configure(xscrollcommand=xsb.set)
         tree.pack(fill="x")
         xsb.pack(fill="x")
+        _enable_treeview_copy(tree)
 
         # トータル
         ttk.Label(result_frame, text="■ トータル",
@@ -1209,6 +1266,67 @@ class OrificeCalculatorApp:
             command=_run_burning_velocity,
         )
         sl_btn.pack(anchor="w", padx=8, pady=(0, 6))
+
+        # ── 詳細機構（AramcoMech3.0）による燃焼速度計算 ──
+        # nC4H10・iC4H10・DME を含む場合、標準の高速パスでは計算できない
+        # ため、581化学種の詳細機構で計算する。数分〜十数分かかる。
+        sl_detail_result_lbl = ttk.Label(
+            sl_frame, justify="left", font=("Consolas", 9),
+            foreground="darkblue",
+            text="  （nC4H10・iC4H10・DME はこちらの詳細機構計算で対応）"
+        )
+        sl_detail_result_lbl.pack(anchor="w", padx=8, pady=(2, 4))
+
+        def _run_burning_velocity_detailed():
+            T_K  = T_var.get() + 273.15
+            P_Pa = P_var.get() * 1000.0
+            lam  = max(lam_var.get(), 0.01)
+
+            sl_detail_btn.config(state="disabled")
+            sl_detail_result_lbl.config(
+                foreground="darkblue",
+                text="  準備中..."
+            )
+
+            def on_progress(msg: str):
+                def update_label():
+                    sl_detail_result_lbl.config(foreground="darkblue", text=f"  {msg}")
+                win.after(0, update_label)
+
+            def worker():
+                res = calc_mixture_burning_velocity_detailed(
+                    comp, lambda_val=lam, T_K=T_K, P_Pa=P_Pa,
+                    progress_callback=on_progress,
+                )
+
+                def apply_result():
+                    sl_detail_btn.config(state="normal")
+                    if res["ok"]:
+                        win._last_sl_cm_s_detailed = res["Sl_cm_s"]
+                        sl_detail_result_lbl.config(foreground="darkgreen", text=(
+                            f"  層流燃焼速度（AramcoMech3.0詳細機構） Sl = "
+                            f"{res['Sl_cm_s']:.2f} cm/s"
+                            f"　（条件: T={T_var.get():.1f}℃, "
+                            f"P={P_var.get():.3f} kPa(abs), λ={lam:.2f}）"
+                        ))
+                    else:
+                        win._last_sl_cm_s_detailed = None
+                        sl_detail_result_lbl.config(
+                            foreground="red",
+                            text=f"  計算できませんでした: {res['reason']}"
+                        )
+
+                win.after(0, apply_result)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        sl_detail_btn = ttk.Button(
+            sl_frame,
+            text="⚠⚠ 詳細機構(AramcoMech3.0)で計算 "
+                 "— nC4H10/iC4H10/DME対応・数分〜十数分かかります",
+            command=_run_burning_velocity_detailed,
+        )
+        sl_detail_btn.pack(anchor="w", padx=8, pady=(0, 6))
 
         def recalc():
             """条件変更時に再計算"""
