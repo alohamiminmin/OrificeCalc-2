@@ -545,17 +545,19 @@ class OrificeCalculatorApp:
         dialog.title("カスタム混合ガス作成")
         dialog.resizable(False, True)
 
-        # オリフィスGUI左隣に初期配置
+        # オリフィスGUI左上を基準に、同じ左上座標へ重ねて初期配置
         self.root.update_idletasks()
         _dx0 = self.root.winfo_x()
         _dy0 = self.root.winfo_y()
-        dialog.geometry(f"340x640+{_dx0 - 340 - 4}+{_dy0}")
+        dialog.geometry(f"340x640+{_dx0}+{_dy0}")
 
         def _follower_dialog(mx, my, mw):
             if not dialog.winfo_exists():
                 return False
+            dw = dialog.winfo_width()
             dh = dialog.winfo_height()
-            dialog.geometry(f"340x{dh}+{mx - 340 - 4}+{my}")
+            # オリフィスGUIの左上(mx, my)と常に一致させる
+            dialog.geometry(f"{dw}x{dh}+{mx}+{my}")
             return True
 
         self._configure_followers.append(_follower_dialog)
@@ -1123,18 +1125,21 @@ class OrificeCalculatorApp:
             messagebox.showinfo("情報", "ガスを選択してから実行してください")
             return
 
-        # ── ウィンドウ（オリフィスGUI右隣に配置し移動に追従） ──
+        # ── ウィンドウ（オリフィスGUI右上を基準に、同じ右上座標へ重ねる） ──
         win = tk.Toplevel(self.root)
         self._combustion_win = win  # 多重起動防止用に保持
         win.title(f"燃焼特性 — {gas_name}")
         win.resizable(True, True)
+
+        _WIN_W, _WIN_H = 960, 900
 
         def _place_beside_main():
             self.root.update_idletasks()
             mx = self.root.winfo_x()
             my = self.root.winfo_y()
             mw = self.root.winfo_width()
-            win.geometry(f"960x900+{mx + mw + 4}+{my}")
+            # オリフィスGUIの右上(mx+mw, my)と、このウィンドウの右上を一致させる
+            win.geometry(f"{_WIN_W}x{_WIN_H}+{mx + mw - _WIN_W}+{my}")
 
         _place_beside_main()
 
@@ -1143,7 +1148,8 @@ class OrificeCalculatorApp:
                 return False
             ww = win.winfo_width()
             wh = win.winfo_height()
-            win.geometry(f"{ww}x{wh}+{mx + mw + 4}+{my}")
+            # オリフィスGUIの右上(mx+mw, my)と常に一致させる
+            win.geometry(f"{ww}x{wh}+{mx + mw - ww}+{my}")
             return True
 
         self._configure_followers.append(_follower_combustion)
