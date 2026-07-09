@@ -1334,7 +1334,7 @@ class OrificeCalculatorApp:
         sl_detail_btn = ttk.Button(
             sl_frame,
             text="⚠⚠ 詳細機構(AramcoMech3.0)で計算 "
-                 "— nC4H10/iC4H10/DME対応・最初の途中経過まで数分、収束まで最大20分",
+                 "— nC4H10/iC4H10/DME対応・最初の途中経過まで数分、60分経過にて中断します。",
             command=_run_burning_velocity_detailed,
         )
         sl_detail_btn.pack(anchor="w", padx=8, pady=(0, 6))

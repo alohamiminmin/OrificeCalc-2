@@ -794,7 +794,7 @@ def calc_mixture_burning_velocity_detailed(
         T_K: float = 298.15,
         P_Pa: float = 101325.0,
         progress_callback: Optional[callable] = None,
-        max_time_sec: float = 1200.0) -> Dict[str, object]:
+        max_time_sec: float = 3600.0) -> Dict[str, object]:
     """
     AramcoMech3.0（581化学種・3037反応式）を使った詳細機構による
     層流燃焼速度計算。nC4H10・iC4H10・DME を含む混合ガスに対応する。
