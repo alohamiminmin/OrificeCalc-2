@@ -188,11 +188,23 @@ def _prepare_common_state(
         if Z_error is None:
             Z_error = f"{z_model_name}モデルがNoneを返しました（原因不明）"
 
+    # Z の計算自体は成功したが、内部で別バックエンドへ自動フォールバック
+    # した場合（例: HEOS混合ガスが特定成分ペアの相互作用データ不足で
+    # 構築できず PR で計算した場合）は、エラーではなく情報注記として取得する
+    Z_note = None
+    if Z is not None and z_model_name != "理想気体":
+        try:
+            from core.coolprop_models import get_last_z_note
+            Z_note = get_last_z_note()
+        except Exception:
+            Z_note = None
+
     rho = calc_density(P1_Pa, T_K, M_kg, Z)
 
     corr["密度ρ[kg/m³]"]  = rho
     corr["圧縮係数Z"]     = Z      # ← テーブル表示・_ensure_z_column で参照
     corr["Z計算エラー"]   = Z_error
+    corr["Z計算注記"]     = Z_note
 
     # 補正情報を corr に格納（GUI 等で参照しやすくする）
     corr["補正後D[mm]"] = D_corr
@@ -224,6 +236,7 @@ def _prepare_common_state(
         "Z": Z,
         "Z_n": Z_n,
         "Z_error": Z_error,
+        "Z_note": Z_note,
         "rho": rho,
         "corr": corr,
     }
@@ -274,6 +287,7 @@ def _calculate_single_point_iso5167(
     Z = common["Z"]
     Z_n = common["Z_n"]
     Z_error = common.get("Z_error")
+    Z_note = common.get("Z_note")
     rho = common["rho"]
 
     # Re 収束ループ（300回）
@@ -427,6 +441,7 @@ def _calculate_single_point_iso5167(
         "密度ρ[kg/m³]": rho,
         "圧縮係数Z": Z,
         "Z計算エラー": Z_error,
+        "Z計算注記": Z_note,
         "β": beta_corr,
         "補正後D[mm]": D_corr,
         "補正後d[mm]": d_corr,

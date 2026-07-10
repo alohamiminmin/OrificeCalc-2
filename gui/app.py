@@ -879,6 +879,7 @@ class OrificeCalculatorApp:
                         row.get("流出係数C"), row.get("膨張補正係数ε"),
                         row.get("体積流量[m³/h]"),
                         row.get("Z計算エラー"),
+                        row.get("Z計算注記"),
                     )
                     fit_mark = "○" if ("適用範囲内" in note) else "×"
                     row_ordered = {
@@ -1040,7 +1041,7 @@ class OrificeCalculatorApp:
 
         return df
 
-    def _make_note(self, mode, beta, D, Re, Z, C, epsilon, Qv, z_error=None):
+    def _make_note(self, mode, beta, D, Re, Z, C, epsilon, Qv, z_error=None, z_note=None):
         notes = []
 
         if Z is None or pd.isnull(Z):
@@ -1079,10 +1080,15 @@ class OrificeCalculatorApp:
             if Re is None or pd.isnull(Re) or Re < 5000:
                 notes.append("Re < 5000 (JIS 下限)")
 
-        if len(notes) == 0:
-            return "適用範囲内"
-        else:
-            return " / ".join(notes)
+        base = "適用範囲内" if len(notes) == 0 else " / ".join(notes)
+
+        # Z計算そのものは成功しているが、内部で別バックエンドへ自動
+        # フォールバックした場合の情報注記（エラーではないため
+        # 「適用範囲内」判定には影響させない＝末尾に付加するのみ）
+        if z_note:
+            base = f"{base} / ℹ {z_note}"
+
+        return base
 
     def show_combustion(self):
         """燃焼特性ウィンドウを表示（T/P/λ 設定付き）"""

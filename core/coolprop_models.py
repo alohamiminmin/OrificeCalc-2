@@ -95,20 +95,59 @@ def _resolve_components(gas_prop: Dict[str, Any]):
     return None, None
 
 
+# HEOS混合ガスが構築できない場合の自動フォールバック先バックエンド。
+# Peng-Robinsonは汎用結合則（kij=0）を用いるため、特定成分ペアの
+# 実験データが無くても計算できる。本アプリは低圧ガス配管（既定で
+# 1次圧 10kPaG 程度まで）が主用途であり、この圧力域では実在気体
+# 補正そのものが小さいため、HEOSほど高精度でなくとも実用上十分な
+# 精度が得られる。
+_HEOS_MIXTURE_FALLBACK_BACKEND = "PR"
+
+
 def _build_state(backend: str, gas_prop: Dict[str, Any]):
-    """指定バックエンドの AbstractState を構築（流体名未解決なら None）。"""
+    """
+    指定バックエンドの AbstractState を構築（流体名未解決なら None）。
+
+    HEOS で複数成分の混合ガスを構築する際、CoolProp は成分ペアごとの
+    二成分相互作用パラメータ（GERG-2008 departure function 用）を
+    必要とする。DME や NH3 のように実験データが少ない成分は、N2・O2・
+    CH4 など極めて一般的な成分との組み合わせであってもこのデータが
+    登録されておらず、AbstractState の構築自体が
+    ValueError（"Could not match the binary pair ..."）で失敗する。
+    この場合、相互作用パラメータを必要としない汎用立方状態方程式
+    （Peng-Robinson）に自動フォールバックし、_last_z_note にその旨を
+    記録する（計算自体は継続し、エラー扱いにはしない）。
+    """
+    global _last_z_note
     formulas, fracs = _resolve_components(gas_prop)
     if not formulas:
         return None
 
     cp_names = [_CP_NAMES[f] for f in formulas]
     fluid_str = "&".join(cp_names)
+    is_mixture = len(cp_names) > 1
 
     CP = _cp()
-    AS = CP.AbstractState(backend, fluid_str)
-    if len(cp_names) > 1:
-        AS.set_mole_fractions(fracs)
-    return AS
+
+    try:
+        AS = CP.AbstractState(backend, fluid_str)
+        if is_mixture:
+            AS.set_mole_fractions(fracs)
+        return AS
+    except Exception as ex:
+        if backend == "HEOS" and is_mixture:
+            try:
+                AS = CP.AbstractState(_HEOS_MIXTURE_FALLBACK_BACKEND, fluid_str)
+                AS.set_mole_fractions(fracs)
+                _last_z_note = (
+                    f"HEOS(GERG-2008相当)が成分間の相互作用データ不足のため構築できず、"
+                    f"{_HEOS_MIXTURE_FALLBACK_BACKEND}(Peng-Robinson)で計算しました"
+                    f"（成分: {', '.join(formulas)}）"
+                )
+                return AS
+            except Exception:
+                pass  # フォールバックも失敗 → 元の例外を呼び出し元へ伝播
+        raise
 
 
 def _update_with_phase_fallback(AS, P_Pa: float, T: float) -> bool:
@@ -147,16 +186,29 @@ def _update_with_phase_fallback(AS, P_Pa: float, T: float) -> bool:
 # ============================================================
 _last_z_error: Optional[str] = None
 
+# 直近の計算で発生した「エラーではないが利用者に伝えるべき注記」
+#   例: HEOS混合ガスが特定成分ペアの相互作用データ不足で構築できず、
+#       Peng-Robinson(PR)へ自動フォールバックした場合など。
+#   計算自体は成功している（Z/密度は有効な値を返す）ため _last_z_error
+#   とは区別し、GUI側は警告ではなく情報として表示する。
+_last_z_note: Optional[str] = None
+
 
 def get_last_z_error() -> Optional[str]:
     """直近の calc_Z_* 呼び出しでZがNoneになった理由を返す（無ければNone）。"""
     return _last_z_error
 
 
+def get_last_z_note() -> Optional[str]:
+    """直近の calc_Z_*/calc_rho_* 呼び出しで発生した情報注記を返す（無ければNone）。"""
+    return _last_z_note
+
+
 def _calc_Z_backend(backend: str, P_Pa: float, T: float,
                      gas_prop: Dict[str, Any]) -> Optional[float]:
-    global _last_z_error
+    global _last_z_error, _last_z_note
     _last_z_error = None
+    _last_z_note = None
     try:
         if P_Pa is None or T is None or T <= 0 or P_Pa <= 0:
             _last_z_error = f"圧力または温度が不正です (P={P_Pa}, T={T})"
@@ -185,6 +237,8 @@ def _calc_Z_backend(backend: str, P_Pa: float, T: float,
 
 def _calc_rho_backend(backend: str, P_Pa: float, T: float,
                        gas_prop: Dict[str, Any]) -> Optional[float]:
+    global _last_z_note
+    _last_z_note = None
     try:
         if P_Pa is None or T is None or T <= 0 or P_Pa <= 0:
             return None
