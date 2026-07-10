@@ -222,12 +222,20 @@ _CT_FUEL_HEXMECH: Dict[str, str] = {
 }
 _MECH_HEXMECH = "n-hexane-NUIG-2015.yaml"
 
-# ammonia-CO-H2-Alzueta-2023: NH3系。断熱火炎温度・層流燃焼速度とも
-# 高速に対応可能（42化学種と小規模なため）。
-_CT_FUEL_NH3: Dict[str, str] = {
-    "NH3": "NH3",
+# Nakamura: NH3・CH4・C2H6系。断熱火炎温度・層流燃焼速度とも
+# 高速に対応可能（38化学種・232反応式とAlzuetaよりさらに小規模）。
+# Alzueta機構(NH3・CO・H2系)からNakamura機構に一本化した
+# （2026年7月、jiweiqi/CollectionOfMechanisms より入手・検証）。
+# CH4・C2H6も含むため、NH3+CH4等の混合ガスにも対応できる点が
+# Alzuetaに対する優位点。相互検証: NH3単体の断熱火炎温度で
+# Alzueta機構(1794.0℃)との差0.36%（1800.5℃）を確認済み。
+# 層流燃焼速度はAlzuetaとの差が約28%あり（NH3単体で7.17 vs 10.02
+# cm/s）、これは層流燃焼速度が機構間でばらつきやすい燃焼化学の
+# 性質による。
+_CT_FUEL_NAKAMURA: Dict[str, str] = {
+    "NH3": "NH3", "CH4": "CH4", "C2H6": "C2H6", "CO": "CO", "H2": "H2",
 }
-_MECH_NH3 = "ammonia-CO-H2-Alzueta-2023.yaml"
+_MECH_NAKAMURA = "Nakamura.yaml"
 
 # ============================================================
 # 単独成分の最大層流燃焼速度（文献値, 298 K・1 atm・空気中）
@@ -384,7 +392,7 @@ def calc_single_combustion(formula: str,
 
     # 断熱火炎温度（初期温度 T_K・初期圧力 P_Pa を反映）
     # 優先順位: gri30(標準) → AramcoMech3.0(C4+DME) → NUIG-2015(C5/C6)
-    #           → Alzueta(NH3) → 解析近似（いずれも非対応の場合）
+    #           → Nakamura(NH3) → 解析近似（いずれも非対応の場合）
     Tad = None
     if formula in _CT_FUEL:
         Tad = _adiabatic_T_cantera(_CT_FUEL[formula], lambda_val, T_K, P_Pa)
@@ -398,10 +406,10 @@ def calc_single_combustion(formula: str,
         if mech:
             Tad = _adiabatic_T_cantera(_CT_FUEL_HEXMECH[formula], lambda_val,
                                         T_K, P_Pa, mechanism_path=mech)
-    elif formula in _CT_FUEL_NH3:
-        mech = _get_mechanism_path(_MECH_NH3)
+    elif formula in _CT_FUEL_NAKAMURA:
+        mech = _get_mechanism_path(_MECH_NAKAMURA)
         if mech:
-            Tad = _adiabatic_T_cantera(_CT_FUEL_NH3[formula], lambda_val,
+            Tad = _adiabatic_T_cantera(_CT_FUEL_NAKAMURA[formula], lambda_val,
                                         T_K, P_Pa, mechanism_path=mech)
 
     if Tad is None:
@@ -659,11 +667,13 @@ def _calc_mixture_Tad_cantera(comp_norm: Dict[str, float],
       2. AramcoMech3.0     （+ nC4H10, iC4H10, DME）
       3. n-hexane-NUIG-2015（+ nC5H12, iC5H12, C6H14。ただし機構内では
                               gri30系のCH4等もカバーされるため単独でも可）
-      4. ammonia-CO-H2-Alzueta-2023（NH3 + CO, H2）
+      4. Nakamura.yaml     （NH3 + CH4, C2H6, CO, H2。NH3とCH4等の
+                              炭化水素が混在する組成にも対応できる）
 
     混合ガス中の可燃成分が、いずれか1つの機構ですべてカバーできる
     場合のみ Cantera 計算を実行する。異なる機構が必要な成分が混在する
-    場合（例: CH4 + NH3）は None を返し、呼び出し元の解析近似に委ねる。
+    場合（例: NH3 + C3H8, NH3 + nC4H10）は None を返し、呼び出し元の
+    解析近似に委ねる。
     """
     try:
         import cantera as ct
@@ -677,9 +687,9 @@ def _calc_mixture_Tad_cantera(comp_norm: Dict[str, float],
     hexmech_path = _get_mechanism_path(_MECH_HEXMECH)
     if hexmech_path:
         candidates.append((hexmech_path, {**_CT_FUEL, **_CT_FUEL_ARAMCO, **_CT_FUEL_HEXMECH}))
-    nh3_path = _get_mechanism_path(_MECH_NH3)
-    if nh3_path:
-        candidates.append((nh3_path, _CT_FUEL_NH3))
+    nakamura_path = _get_mechanism_path(_MECH_NAKAMURA)
+    if nakamura_path:
+        candidates.append((nakamura_path, _CT_FUEL_NAKAMURA))
 
     for mech_path, fuel_map in candidates:
         try:
@@ -739,21 +749,22 @@ def calc_mixture_burning_velocity(composition: Dict[str, float],
         mix_str = _build_mixture_with_air(gas, comp_norm, lambda_val, _CT_FUEL)
         used_mechanism = "gri30.yaml"
 
-        # gri30 非対応の場合、NH3 Alzueta 機構（NH3・CO・H2系、高速）を試す
+        # gri30 非対応の場合、Nakamura 機構（NH3・CH4・C2H6・CO・H2系、高速）を試す
         if mix_str is None:
-            nh3_path = _get_mechanism_path(_MECH_NH3)
-            if nh3_path:
-                gas_nh3 = ct.Solution(nh3_path)
-                mix_str_nh3 = _build_mixture_with_air(gas_nh3, comp_norm, lambda_val, _CT_FUEL_NH3)
-                if mix_str_nh3 is not None:
-                    gas = gas_nh3
-                    mix_str = mix_str_nh3
-                    used_mechanism = "ammonia-CO-H2-Alzueta-2023.yaml"
+            nakamura_path = _get_mechanism_path(_MECH_NAKAMURA)
+            if nakamura_path:
+                gas_nakamura = ct.Solution(nakamura_path)
+                mix_str_nakamura = _build_mixture_with_air(
+                    gas_nakamura, comp_norm, lambda_val, _CT_FUEL_NAKAMURA)
+                if mix_str_nakamura is not None:
+                    gas = gas_nakamura
+                    mix_str = mix_str_nakamura
+                    used_mechanism = "Nakamura.yaml"
 
         if mix_str is None:
             unsupported = sorted(
                 f for f, frac in comp_norm.items()
-                if frac > 0 and f not in _CT_FUEL and f not in _CT_FUEL_NH3
+                if frac > 0 and f not in _CT_FUEL and f not in _CT_FUEL_NAKAMURA
                 and f not in ("N2", "O2", "CO2", "H2O")
             )
             if unsupported:
